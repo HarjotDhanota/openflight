@@ -135,7 +135,11 @@ from typing import Any, Mapping, Optional, Sequence
 import numpy as np
 from scipy.optimize import least_squares
 
-from openflight.camera.club_delivery import HeadPosition
+from openflight.camera.club_delivery import (
+    CONTACT_TANGENT_WINDOW_S,
+    HEEL_ANCHOR_ABOVE_SOLE_M,
+    HeadPosition,
+)
 from openflight.camera.head_track import SOURCE as HEAD_TRACK_SOURCE
 from openflight.clubs import ClubType
 from openflight.clubs.physics import get_club_physics
@@ -149,6 +153,7 @@ from openflight.shot_metrics import (
     MODEL_GEOMETRY,
     NOT_MEASURED,
 )
+from openflight.source_labels import ASSUMED_DEPTH_NOTE, depth_assumed
 
 LABEL_RANK = {
     MEASURED: 5,
@@ -965,6 +970,242 @@ def _low_point_why(positions, impact_t_s, ball: Optional[Mapping]) -> Optional[s
     return "; ".join(reasons) or None
 
 
+# G2 C6b (4 Nov 2026): the low point from measured data. Its DISTANCE is the pre-contact
+# track's own arc (a circle through heel height against forward; a quadratic there puts the
+# turn 40 mm early over a 0.6 m approach) when that turn's 1-sigma, the height noise
+# propagated, is within LOW_POINT_FIT_SIGMA_MAX_MM; else the measured attack angle on a circle whose
+# radius is bounded by ARC_RADIUS_BOUNDS_M (Krasna 2019's near-impact radii are ~1.0-1.08 m;
+# the owner's bound is 1.0-1.6 m), estimated, with the range those bounds and the attack
+# angle's sigma give. Its HEIGHT is only the measured heel heights' own turn (each a
+# quadratic in time over the attack angle's window), read at most
+# LOW_POINT_HEIGHT_HORIZON_FRAMES past the last pre-contact frame, minus the heel anchor's
+# height over a grounded sole; never the bounded radius. Fat is a verdict of a measured
+# height only: the sole's lowest point under the ball's bottom before the ball.
+LOW_POINT_FIT_SIGMA_MAX_MM = 60.0
+ARC_RADIUS_BOUNDS_M = (1.0, 1.6)
+LOW_POINT_HEIGHT_HORIZON_FRAMES = 1.0
+LOW_POINT_FIT_SOURCE = "club_arc:pre_contact_turn"
+LOW_POINT_ATTACK_SOURCE = "club_arc:attack_angle_bounded_radius"
+LOW_POINT_HEIGHT_SOURCE = "club_arc:heel_heights"
+LOW_POINT_RADIUS_NOTE = "estimated (arc radius assumed {:.1f}-{:.1f} m)".format(
+    *ARC_RADIUS_BOUNDS_M
+)
+
+
+def _entry(value, status, source, *, range_=None, reason=None, note=None, **extra) -> dict:
+    return {
+        "value": None if value is None else round(float(value), 2),
+        "status": status,
+        "source": source,
+        "frame": None,
+        "range": None if range_ is None else [round(float(v), 2) for v in range_],
+        "reason": reason,
+        "note": note,
+        **extra,
+    }
+
+
+def _turn_with_sigma(x: np.ndarray, y: np.ndarray, noise_m: float):
+    """(x at the turn, its 1-sigma, curvature a) of the LS quadratic y(x); None if flat."""
+    centre = float(np.mean(x))
+    design = np.vander(x - centre, 3, increasing=True)  # c, b, a
+    if len(x) < 3 or np.linalg.matrix_rank(design) < 3:
+        return None
+    coefficients, *_ = np.linalg.lstsq(design, y, rcond=None)
+    c, b, a = (float(v) for v in coefficients)
+    if a <= 0.0:
+        return None
+    covariance = noise_m**2 * np.linalg.inv(design.T @ design)
+    gradient = np.array([0.0, -1.0 / (2.0 * a), b / (2.0 * a**2)])
+    sigma = math.sqrt(max(0.0, float(gradient @ covariance @ gradient)))
+    return centre - b / (2.0 * a), sigma, (c, b, a, centre)
+
+
+def _circle_bottom(x: np.ndarray, z: np.ndarray) -> Optional[tuple[float, float]]:
+    """(x, z) of the lowest point of the algebraic LS circle through (x, z), or None when
+    the points bend downward (centre below them) or do not fix a circle."""
+    design = np.c_[2.0 * x, 2.0 * z, np.ones_like(x)]
+    if len(x) < 3 or np.linalg.matrix_rank(design) < 3:
+        return None
+    (xc, zc, k), *_ = np.linalg.lstsq(design, x**2 + z**2, rcond=None)
+    radius_sq = float(k + xc**2 + zc**2)
+    if radius_sq <= 0.0 or zc <= float(np.max(z)):
+        return None
+    return float(xc), float(zc - math.sqrt(radius_sq))
+
+
+def _arc_turn_with_sigma(x: np.ndarray, z: np.ndarray, noise_m: float):
+    """(x at the circle's bottom, its 1-sigma from ``noise_m`` in each height); None."""
+    bottom = _circle_bottom(x, z)
+    if bottom is None:
+        return None
+    step = 1e-5
+    gradient = []
+    for index in range(len(z)):
+        moved = z.copy()
+        moved[index] += step
+        shifted = _circle_bottom(x, moved)
+        if shifted is None:
+            return bottom[0], math.inf
+        gradient.append((shifted[0] - bottom[0]) / step)
+    return bottom[0], float(noise_m * np.linalg.norm(gradient))
+
+
+def low_point_estimate(
+    positions,
+    *,
+    contact_t_s: Optional[float],
+    ball: Optional[Mapping],
+    attack_angle_deg: Optional[float],
+    attack_sigma_deg: Optional[float],
+    horizontal_offset_deg: Optional[float] = None,
+    noise_m: float = POSITION_NOISE_FLOOR_M,
+) -> dict:
+    """The low point distance (mm past the ball, + after it) and the sole's low point height
+    (mm above the ball's bottom) from the pre-contact heel positions, each an entry like the
+    payload's metrics (see ``LOW_POINT_FIT_SIGMA_MAX_MM``)."""
+    none = "no pre-contact head positions and resting ball"
+    if contact_t_s is None or ball is None:
+        return {
+            "low_point_distance_mm": _entry(None, NOT_MEASURED, None, reason=none),
+            "low_point_height_mm": _entry(None, NOT_MEASURED, None, reason=none, verdict=None),
+        }
+    points = sorted(
+        (p for p in positions if float(p["t_s"]) < float(contact_t_s)),
+        key=lambda p: float(p["t_s"]),
+    )
+    turned = _turn(
+        np.array([[p["forward_m"], p["lateral_m"], p["up_m"]] for p in points], dtype=float)
+        if points
+        else np.zeros((0, 3)),
+        horizontal_offset_deg,
+    )
+    ball_xyz = _turn(
+        np.array([[ball["forward_m"], ball.get("lateral_m", 0.0), ball["up_m"]]], dtype=float),
+        horizontal_offset_deg,
+    )[0]
+    surface = float(ball_xyz[2]) - BALL_DIAMETER_M / 2.0
+    forward, up = turned[:, 0], turned[:, 2]
+    times = np.array([float(p["t_s"]) for p in points])
+    return {
+        "low_point_distance_mm": _low_point_distance(
+            forward, up, float(ball_xyz[0]), attack_angle_deg, attack_sigma_deg, noise_m
+        ),
+        "low_point_height_mm": _low_point_height(
+            times, forward, up, float(ball_xyz[0]), surface, noise_m
+        ),
+    }
+
+
+def _low_point_distance(forward, up, ball_forward, attack_deg, attack_sigma, noise_m) -> dict:
+    fit_reason = None
+    if len(forward) >= 3:
+        turn = _arc_turn_with_sigma(forward, up, noise_m)
+        if turn is None:
+            fit_reason = "the pre-contact track does not turn upward"
+        elif 1000.0 * turn[1] <= LOW_POINT_FIT_SIGMA_MAX_MM:
+            value = 1000.0 * (turn[0] - ball_forward)
+            sigma_mm = 1000.0 * turn[1]
+            return _entry(
+                value,
+                CALCULATED,
+                LOW_POINT_FIT_SOURCE,
+                range_=(value - RANGE_SIGMAS * sigma_mm, value + RANGE_SIGMAS * sigma_mm),
+                note=f"the pre-contact track's own arc, +-{sigma_mm:.0f} mm (1 sigma)",
+                sigma_mm=round(sigma_mm, 1),
+            )
+        else:
+            fit_reason = (
+                f"the pre-contact track's arc puts its bottom +-{1000.0 * turn[1]:.0f} mm "
+                f"(over {LOW_POINT_FIT_SIGMA_MAX_MM:.0f})"
+            )
+    else:
+        fit_reason = f"{len(forward)} pre-contact positions: fewer than 3 cannot turn"
+    if attack_deg is None or not len(forward):
+        return _entry(None, NOT_MEASURED, None, reason=f"{fit_reason}; no measured attack angle")
+    sigma = float(attack_sigma or 0.0)
+    last = float(forward[-1])
+
+    def from_ball(radius: float, attack: float) -> float:
+        # a circle of this radius through the last frame at the measured direction
+        return 1000.0 * (last - radius * math.sin(math.radians(attack)) - ball_forward)
+
+    corners = [
+        from_ball(radius, attack)
+        for radius in ARC_RADIUS_BOUNDS_M
+        for attack in (attack_deg - sigma, attack_deg + sigma)
+    ]
+    value = from_ball(sum(ARC_RADIUS_BOUNDS_M) / 2.0, attack_deg)
+    return _entry(
+        value,
+        ESTIMATED,
+        LOW_POINT_ATTACK_SOURCE,
+        range_=(min(corners), max(corners)),
+        reason=fit_reason,
+        note=(
+            f"{LOW_POINT_RADIUS_NOTE}: the attack angle {attack_deg:.1f} +- {sigma:.1f} deg at "
+            "the last pre-contact frame on a circle of that radius"
+        ),
+    )
+
+
+def _low_point_height(times, forward, up, ball_forward, surface, noise_m) -> dict:
+    if len(times):
+        window = times >= (times.max() - CONTACT_TANGENT_WINDOW_S - 1e-9)
+        t, f, z = times[window], forward[window], up[window]
+    else:
+        t = f = z = times
+    if len(t) < 3:
+        return _entry(
+            None,
+            NOT_MEASURED,
+            None,
+            reason=f"{len(t)} pre-contact heel heights: fewer than 3 cannot turn",
+            verdict=None,
+            upper_bound_mm=None,
+        )
+    interval = float(np.median(np.diff(t)))
+    horizon = float(t.max()) + LOW_POINT_HEIGHT_HORIZON_FRAMES * interval
+    sole = z - HEEL_ANCHOR_ABOVE_SOLE_M - surface
+    turn = _turn_with_sigma(t, sole, noise_m)
+    if turn is not None:
+        c, b, a, centre = turn[2]
+        at_horizon = c + b * (horizon - centre) + a * (horizon - centre) ** 2
+    else:
+        slope = float(np.polyfit(t, sole, 1)[0])
+        at_horizon = float(sole[-1]) + slope * (horizon - float(t.max()))
+    upper = 1000.0 * min(float(sole.min()), at_horizon)
+    if turn is None or not float(t.min()) <= turn[0] <= horizon:
+        where = "does not turn upward" if turn is None else "turns"
+        return _entry(
+            None,
+            NOT_MEASURED,
+            None,
+            reason=(
+                f"the heel {where} more than one frame past the last pre-contact frame: the "
+                f"low point lies beyond the measured heights (the sole is at most "
+                f"{upper:+.0f} mm from the ball's bottom there)"
+            ),
+            verdict=None,
+            upper_bound_mm=round(upper, 1),
+        )
+    c, b, a, centre = turn[2]
+    height_mm = 1000.0 * (c - b**2 / (4.0 * a))
+    low_forward = float(np.polyval(np.polyfit(t, f, 1), turn[0]))
+    fat = height_mm < 0.0 and low_forward < ball_forward
+    return _entry(
+        height_mm,
+        MEASURED,
+        LOW_POINT_HEIGHT_SOURCE,
+        note=(
+            "the heel heights' own turn minus the heel anchor's height over a grounded sole "
+            f"({1000.0 * HEEL_ANCHOR_ABOVE_SOLE_M:.0f} mm)"
+        ),
+        verdict="fat" if fat else None,
+        upper_bound_mm=round(upper, 1),
+    )
+
+
 def _without_prior_values(arc: ClubArc) -> ClubArc:
     """A model-geometry arc as the shot record keeps it (C11f, owner 3 Nov 2026): no value.
 
@@ -1061,6 +1302,23 @@ def club_delivery_payload(delivery: Any, *, club: Any, handedness: Optional[str]
         if why:
             for name in ("low_point_distance_mm", "low_point_height_mm", "low_point_side_mm"):
                 metrics[name]["reason"] = f"{metrics[name]['reason']}; the pre-contact track: {why}"
+        # C6b: the low point from the measured track and attack angle, never the prior; one
+        # without a value keeps the arc's reason beside its own
+        low = low_point_estimate(
+            raw,
+            contact_t_s=data.get("contact_t_s"),
+            ball=data.get("ball_position"),
+            attack_angle_deg=_chained_value(data, "attack_angle_deg", "attack_confidence_tier"),
+            attack_sigma_deg=data.get("attack_angle_sigma_deg"),
+            horizontal_offset_deg=offset,
+            noise_m=noise_m,
+        )
+        for name, entry in low.items():
+            if entry["value"] is None:
+                extra = {k: entry[k] for k in ("verdict", "upper_bound_mm") if k in entry}
+                reasons = [text for text in (metrics[name]["reason"], entry["reason"]) if text]
+                entry = {**metrics[name], **extra, "reason": "; ".join(reasons) or None}
+            metrics[name] = entry
     if positions_label is not None:
         metrics = {
             name: _inherit_positions_label(entry, name, arc, positions_label)
@@ -1071,6 +1329,18 @@ def club_delivery_payload(delivery: Any, *, club: Any, handedness: Optional[str]
     )
     chained = data or {}
     head_track = chained.get("status") == HEAD_TRACK_SOURCE
+    assumed_depth = depth_assumed(chained.get("range_evidence_status"))
+    if assumed_depth:
+        for name in (
+            "swing_plane_deg",
+            "swing_direction_deg",
+            "low_point_distance_mm",
+            "low_point_height_mm",
+        ):
+            if metrics[name]["value"] is not None:
+                if LABEL_RANK[metrics[name]["status"]] > LABEL_RANK[ESTIMATED]:
+                    metrics[name] = {**metrics[name], "status": ESTIMATED}
+                metrics[name] = _note(metrics[name], ASSUMED_DEPTH_NOTE)
     if head_track:
         chained_source = HEAD_TRACK_SOURCE
     elif chained.get("status") == "camera_ops_fallback":
@@ -1087,13 +1357,29 @@ def club_delivery_payload(delivery: Any, *, club: Any, handedness: Optional[str]
             arc_rank <= LABEL_RANK[EXPERIMENTAL] if head_track else arc_rank < LABEL_RANK[MEASURED]
         )
         if measured is not None and outranks:
+            # G2 C2: the attack angle carries its propagated sigma, its range +- RANGE_SIGMAS
+            sigma = chained.get("attack_angle_sigma_deg") if name == "attack_angle_deg" else None
+            status = EXPERIMENTAL if head_track else MEASURED
+            reason = None
+            if not head_track and assumed_depth:
+                # G2 C4: an assumed depth caps it at estimated (experimental off the high tier)
+                status = ESTIMATED if chained.get(tier_name) == "high" else EXPERIMENTAL
+                reason = ASSUMED_DEPTH_NOTE
             metrics[name] = {
                 "value": measured,
-                "status": EXPERIMENTAL if head_track else MEASURED,
+                "status": status,
                 "source": chained_source,
                 "frame": chained.get("club_path_frame") if name == "club_path_deg" else None,
-                "range": None,
-                "reason": None,
+                "range": (
+                    [
+                        round(measured - RANGE_SIGMAS * sigma, 2),
+                        round(measured + RANGE_SIGMAS * sigma, 2),
+                    ]
+                    if sigma is not None
+                    else None
+                ),
+                "reason": reason,
+                "sigma": sigma,
             }
         elif metrics[name]["value"] is None and chained:
             flag = (chained.get("head_track") or {}).get(name.replace("_deg", "_flag"))

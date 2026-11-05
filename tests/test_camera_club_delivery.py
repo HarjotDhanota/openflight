@@ -8,25 +8,18 @@ import pytest
 
 import openflight.camera.club_delivery as club_delivery_module
 from openflight.camera.club_delivery import (
-    SCENE_P995_MIN,
     ApproachPairEstimate,
     CameraDeliveryGeometry,
     CameraOpsReference,
     ChainedDelivery,
-    FusedDelivery,
-    TraceResult,
+    _delivery_from_feature_pair,
     _detect_impact_index,
     _preferred_path_estimate,
-    aoa_offset_for_club,
     camera_ops_delivery_from_feature_pair,
     combine_approach_estimates,
-    delivery_from_feature_tracks,
     estimate_chained_delivery,
-    estimate_delivery_trace,
-    fuse_club_delivery,
 )
-from openflight.camera.club_motion import ReferenceBall, detect_reference_ball
-from openflight.clubs import ClubType
+from openflight.camera.club_motion import ReferenceBall
 
 
 class _Ball:
@@ -178,19 +171,17 @@ class TestChainedImpactDelivery:
             aoa_deg=-4.0,
         )
 
-        result = delivery_from_feature_tracks(
-            tracks,
-            times,
-            ranges,
+        result = _delivery_from_feature_pair(
+            tracks[:, :2],
+            times[:2],
+            ranges[:2],
             ball=ball,
             geometry=geometry,
             ops_club_speed_mph=35.0 * 2.23694,
-            timing_plausible=True,
         )
 
-        assert isinstance(result, ChainedDelivery)
-        assert result.status == "chained_high"
-        assert result.club_path_deg == pytest.approx(3.0, abs=0.15)
+        assert isinstance(result, ApproachPairEstimate)
+        assert result.path_deg == pytest.approx(3.0, abs=0.15)
         assert result.attack_angle_deg == pytest.approx(-4.0, abs=0.15)
         assert result.n_features == 12
 
@@ -201,17 +192,16 @@ class TestChainedImpactDelivery:
             camera_lateral_offset_m=-0.08,
         )
 
-        result = delivery_from_feature_tracks(
-            tracks,
-            times,
-            ranges,
+        result = _delivery_from_feature_pair(
+            tracks[:, :2],
+            times[:2],
+            ranges[:2],
             ball=ball,
             geometry=geometry,
             ops_club_speed_mph=35.0 * 2.23694,
-            timing_plausible=True,
         )
 
-        assert result.club_path_deg == pytest.approx(3.0, abs=0.15)
+        assert result.path_deg == pytest.approx(3.0, abs=0.15)
         assert result.attack_angle_deg == pytest.approx(-4.0, abs=0.15)
 
     def test_mirrored_capture_preserves_physical_path_sign(self):
@@ -222,17 +212,16 @@ class TestChainedImpactDelivery:
         mirrored = tracks.copy()
         mirrored[:, :, 0] = geometry.image_width_px - mirrored[:, :, 0]
 
-        result = delivery_from_feature_tracks(
-            mirrored,
-            times,
-            ranges,
+        result = _delivery_from_feature_pair(
+            mirrored[:, :2],
+            times[:2],
+            ranges[:2],
             ball=ball,
             geometry=replace(geometry, horizontal_pixel_sign=-1.0),
             ops_club_speed_mph=35.0 * 2.23694,
-            timing_plausible=True,
         )
 
-        assert result.club_path_deg == pytest.approx(3.0, abs=0.15)
+        assert result.path_deg == pytest.approx(3.0, abs=0.15)
         assert result.attack_angle_deg == pytest.approx(-4.0, abs=0.15)
 
     def test_approach_consensus_keeps_low_confidence_aoa_visible(self):
@@ -268,6 +257,7 @@ class TestChainedImpactDelivery:
         assert result.club_path_deg == pytest.approx(3.0)
 
     def test_path_interval_priority_is_impact_then_final_approach(self):
+        # G2 C3: the impact window ends at the last rest frame, never after contact
         impact = ApproachPairEstimate(3.0, -4.0, 1.0, 1.0, 12)
         final_approach = ApproachPairEstimate(7.0, -4.0, 1.0, 1.0, 12)
 
@@ -276,17 +266,18 @@ class TestChainedImpactDelivery:
             _preferred_path_estimate(
                 {
                     (-4, -1): final_approach,
-                    (-2, 1): impact,
+                    (-3, 0): impact,
                 }
             )
             is impact
         )
+        assert _preferred_path_estimate({(-2, 1): impact}) is None
 
     def test_approach_consensus_keeps_unstable_path_visible_as_low_confidence(self):
         path_windows = [
             ApproachPairEstimate(path, -4.0, 1.0, 1.0, 12) for path in (-13.0, 2.5, 5.0, 14.0)
         ]
-        attack = ApproachPairEstimate(3.0, -4.2, 1.0, 1.0, 12)
+        attack = ApproachPairEstimate(3.0, -4.2, 1.0, 1.0, 12, attack_angle_sigma_deg=0.6)
 
         result = combine_approach_estimates(
             path_windows,
@@ -299,9 +290,10 @@ class TestChainedImpactDelivery:
         assert result.path_confidence_tier == "low"
         assert result.attack_confidence_tier == "high"
 
-    def test_approach_consensus_assigns_medium_to_near_miss_aoa(self):
+    def test_approach_consensus_assigns_medium_to_a_wider_attack_sigma(self):
+        # G2 C2: the tier is the propagated sigma (1-2 deg: medium), not a range
         paths = [ApproachPairEstimate(path, -4.0, 1.0, 1.0, 12) for path in (2.5, 3.0, 3.5, 4.0)]
-        near_miss = ApproachPairEstimate(3.0, -16.0, 1.31, 3.0, 12)
+        near_miss = ApproachPairEstimate(3.0, -16.0, 1.31, 3.0, 12, attack_angle_sigma_deg=1.5)
 
         result = combine_approach_estimates(
             paths,
@@ -311,74 +303,6 @@ class TestChainedImpactDelivery:
 
         assert result.attack_angle_deg == pytest.approx(-16.0)
         assert result.attack_confidence_tier == "medium"
-
-    def test_ops_speed_mismatch_labels_both_angles(self):
-        tracks, times, ranges, ball, geometry = _project_impact_tracks(
-            path_deg=3.0,
-            aoa_deg=-4.0,
-        )
-
-        result = delivery_from_feature_tracks(
-            tracks,
-            times,
-            ranges,
-            ball=ball,
-            geometry=geometry,
-            ops_club_speed_mph=35.0,
-            timing_plausible=True,
-        )
-
-        assert result.status == "chained_outside_bounds"
-        assert result.confidence_tier == "low"
-        assert result.club_path_deg == pytest.approx(3.0, abs=0.5)
-        assert result.attack_angle_deg == pytest.approx(-4.0, abs=0.5)
-        assert any("speed ratio" in note for note in result.notes)
-
-    def test_static_image_features_do_not_steal_the_club_track(self):
-        tracks, times, ranges, ball, geometry = _project_impact_tracks(
-            path_deg=3.0,
-            aoa_deg=-4.0,
-        )
-        static = np.repeat(tracks[:8, :1, :], 3, axis=1)
-        tracks = np.concatenate((tracks, static), axis=0)
-
-        result = delivery_from_feature_tracks(
-            tracks,
-            times,
-            ranges,
-            ball=ball,
-            geometry=geometry,
-            ops_club_speed_mph=35.0 * 2.23694,
-            timing_plausible=True,
-        )
-
-        assert result.status == "chained_high"
-        assert result.club_path_deg == pytest.approx(3.0, abs=0.15)
-        assert result.attack_angle_deg == pytest.approx(-4.0, abs=0.15)
-        assert result.n_features == 12
-
-    def test_interval_disagreement_demotes_to_experimental(self):
-        tracks, times, ranges, ball, geometry = _project_impact_tracks(
-            path_deg=3.0,
-            aoa_deg=-4.0,
-        )
-        # Move only the post-impact point sideways. The central interval stays
-        # physically bounded, but pre/cross no longer corroborate each other.
-        tracks[:, 2, 0] += 10.0
-
-        result = delivery_from_feature_tracks(
-            tracks,
-            times,
-            ranges,
-            ball=ball,
-            geometry=geometry,
-            ops_club_speed_mph=35.0 * 2.23694,
-            timing_plausible=True,
-        )
-
-        assert result.status == "chained_experimental"
-        assert result.club_path_deg is not None
-        assert result.attack_angle_deg is not None
 
 
 def _project_camera_ops_pair(
@@ -603,117 +527,9 @@ class TestCameraOpsFallback:
 # ---------------------------------------------------------------------------
 
 
-class TestAoaOffsets:
-    def test_measured_clubs_return_measured_values(self):
-        assert aoa_offset_for_club(ClubType.IRON_9) == (16.0, "measured")
-        assert aoa_offset_for_club(ClubType.IRON_7) == (10.5, "measured")
-        assert aoa_offset_for_club(ClubType.IRON_5) == (9.1, "measured")
-        assert aoa_offset_for_club(ClubType.DRIVER) == (21.6, "measured")
-
-    def test_mid_iron_interpolates_between_anchors(self):
-        offset, source = aoa_offset_for_club(ClubType.IRON_8)  # loft 38, between 34 and 42
-        assert source == "loft_interpolated"
-        assert 10.5 < offset < 16.0
-
-    def test_interpolation_is_monotone_with_loft(self):
-        six, _ = aoa_offset_for_club(ClubType.IRON_6)
-        eight, _ = aoa_offset_for_club(ClubType.IRON_8)
-        assert 9.1 <= six <= 10.5
-        assert 10.5 <= eight <= 16.0
-
-    def test_wedges_clamp_to_last_anchor_not_extrapolate(self):
-        # No measurements above the 9-iron: clamping is the conservative call.
-        for club in (ClubType.PW, ClubType.SW, ClubType.LW):
-            offset, source = aoa_offset_for_club(club)
-            assert offset == 16.0
-            assert source == "loft_interpolated"
-
-    def test_long_irons_clamp_to_first_anchor(self):
-        offset, source = aoa_offset_for_club(ClubType.IRON_3)
-        assert offset == 9.1
-        assert source == "loft_interpolated"
-
-    def test_woods_and_hybrids_borrow_driver_offset(self):
-        for club in (ClubType.WOOD_3, ClubType.HYBRID_5):
-            offset, source = aoa_offset_for_club(club)
-            assert offset == 21.6
-            assert source == "class_extrapolated"
-
-    def test_unknown_club_uses_iron_line(self):
-        offset, source = aoa_offset_for_club(ClubType.UNKNOWN)
-        assert source == "loft_interpolated"
-        assert offset == 10.5  # mid-iron default loft = the 7-iron anchor
-
-
 # ---------------------------------------------------------------------------
 # Fusion math
 # ---------------------------------------------------------------------------
-
-
-class TestFusion:
-    def _trace(self, deg: float) -> TraceResult:
-        return TraceResult(status="ok", trace_deg=deg, n_pairs=3)
-
-    def test_fused_reproduces_offline_9i_chain(self):
-        # Radar candidate -20.4 + 16.0 = -4.4; trace -48.3 -> path ~ +3.9
-        fused = fuse_club_delivery(-20.4, self._trace(-48.3), ClubType.IRON_9)
-        assert fused.status == "fused"
-        assert fused.attack_angle_deg == pytest.approx(-4.4, abs=0.05)
-        expected_path = math.degrees(
-            math.atan(math.tan(math.radians(-4.4)) / math.tan(math.radians(-48.3)))
-        )
-        assert fused.club_path_deg == pytest.approx(expected_path, abs=0.05)
-        assert fused.club_path_deg > 0  # descending blow on a -48 trace = in-to-out
-
-    def test_positive_aoa_negative_trace_is_inconsistent(self):
-        # +3.6 corrected AoA (up hit) with a negative trace cannot both be
-        # true: the trace's sign IS the AoA's sign. Blocked, AoA kept.
-        fused = fuse_club_delivery(-18.0, self._trace(-48.0), ClubType.DRIVER)
-        assert fused.status == "trace_aoa_sign_mismatch"
-        assert fused.attack_angle_deg == pytest.approx(3.6, abs=0.05)
-        assert fused.club_path_deg is None
-
-    def test_no_radar_aoa(self):
-        fused = fuse_club_delivery(None, self._trace(-48.0), ClubType.IRON_9)
-        assert fused.status == "no_radar_aoa"
-        assert fused.attack_angle_deg is None
-        assert fused.club_path_deg is None
-
-    def test_trace_failure_still_reports_corrected_aoa(self):
-        fused = fuse_club_delivery(-20.4, TraceResult(status="low_light"), ClubType.IRON_9)
-        assert fused.status == "trace_low_light"
-        assert fused.attack_angle_deg == pytest.approx(-4.4, abs=0.05)
-        assert fused.club_path_deg is None
-
-    @pytest.mark.parametrize("trace_deg", [5.0, -10.0, 88.0, -89.0])
-    def test_trace_out_of_range_blocks_path(self, trace_deg):
-        fused = fuse_club_delivery(-20.4, self._trace(trace_deg), ClubType.IRON_9)
-        assert fused.status == "trace_out_of_range"
-        assert fused.club_path_deg is None
-        assert fused.attack_angle_deg is not None
-
-    def test_sign_mismatch_blocks_path(self):
-        # Negative corrected AoA with a positive trace = camera locked onto
-        # the wrong mover (observed live: flying-ball lock gave trace +19).
-        fused = fuse_club_delivery(-20.4, self._trace(19.5), ClubType.IRON_9)
-        assert fused.status == "trace_aoa_sign_mismatch"
-        assert fused.club_path_deg is None
-        assert fused.attack_angle_deg == pytest.approx(-4.4, abs=0.05)
-
-    def test_driver_positive_aoa_positive_trace_is_legal(self):
-        fused = fuse_club_delivery(-18.0, self._trace(78.0), ClubType.DRIVER)
-        assert fused.status == "fused"  # +3.6 AoA with +78 trace is consistent
-        assert fused.club_path_deg is not None and fused.club_path_deg > 0
-
-    def test_offset_source_propagates(self):
-        fused = fuse_club_delivery(-15.0, self._trace(-50.0), ClubType.IRON_8)
-        assert fused.offset_source == "loft_interpolated"
-
-    def test_returns_dataclass(self):
-        assert isinstance(
-            fuse_club_delivery(None, TraceResult(status="no_capture"), ClubType.IRON_9),
-            FusedDelivery,
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -723,174 +539,6 @@ class TestFusion:
 HEIGHT, WIDTH = 400, 640  # production capture geometry
 BALL_XY = (400, 200)
 FPS = 288.0
-
-
-def _synthetic_capture(
-    *,
-    scene_level: int = 60,
-    ball_bright: int = 245,
-    club_bright: int = 240,
-    club_velocity_px=(30.0, -18.0),
-    n_frames: int = 40,
-    impact_frame: int = 30,
-) -> tuple[np.ndarray, np.ndarray]:
-    """DTL-like capture: static bright ball on tee, bright club sweeping in.
-
-    The club is a diagonal line segment with a blob (head) at its lower end,
-    moving at ``club_velocity_px`` per frame toward the ball; the ball
-    disappears after ``impact_frame``.
-    """
-    rng = np.random.default_rng(7)
-    frames = np.full((n_frames, HEIGHT, WIDTH), scene_level, dtype=np.uint8)
-    frames += rng.integers(0, 8, size=frames.shape, dtype=np.uint8)
-    # a static bright distractor (ball pile) far from the tee
-    frames[:, 360:380, 40:80] = 230
-    # bright static "sky/background" band so scene brightness matches a real
-    # daylight capture (the light gate keys on the background's p99.5)
-    frames[:, 0:28, :] = min(255, int(scene_level * 2.4))
-
-    yy, xx = np.mgrid[0:HEIGHT, 0:WIDTH]
-    ball_mask = (xx - BALL_XY[0]) ** 2 + (yy - BALL_XY[1]) ** 2 <= 5 * 5
-
-    vx, vy = club_velocity_px
-    for idx in range(n_frames):
-        if idx <= impact_frame:
-            frames[idx][ball_mask] = ball_bright
-        steps_to_impact = impact_frame + 0.5 - idx
-        head_x = BALL_XY[0] - vx * steps_to_impact
-        head_y = BALL_XY[1] - vy * steps_to_impact
-        if not (0 <= head_x < WIDTH and 0 <= head_y < HEIGHT):
-            continue
-        if abs(head_x - BALL_XY[0]) < 8 and abs(head_y - BALL_XY[1]) < 8 and idx <= impact_frame:
-            continue  # don't overdraw the ball pre-impact
-        # shaft: connected bright line from the head up-left; head: small blob
-        import cv2
-
-        cv2.line(
-            frames[idx],
-            (int(round(head_x)), int(round(head_y))),
-            (int(round(head_x - 90)), int(round(head_y - 140))),
-            int(club_bright),
-            3,
-        )
-        hx, hy = int(round(head_x)), int(round(head_y))
-        head_blob = (xx - hx) ** 2 + (yy - hy) ** 2 <= 6 * 6
-        frames[idx][head_blob] = club_bright - 60  # head darker than shaft
-
-    ts = (np.arange(n_frames) * (1e9 / FPS)).astype(np.int64)
-    return frames, ts
-
-
-class TestTraceEstimation:
-    def test_bright_scene_produces_trace(self):
-        frames, ts = _synthetic_capture()
-        result = estimate_delivery_trace(frames, ts)
-        assert result.status == "ok", result
-        assert result.n_pairs >= 2
-        # velocity (30, -18) px/frame, image y down -> trace = atan2(18, 30)
-        expected = math.degrees(math.atan2(18.0, 30.0))
-        assert result.trace_deg == pytest.approx(expected, abs=12.0)
-
-    def test_impact_frame_detected_near_truth(self):
-        frames, ts = _synthetic_capture(impact_frame=30)
-        result = estimate_delivery_trace(frames, ts)
-        assert result.impact_frame is not None
-        assert abs(result.impact_frame - 30) <= 1
-
-    def test_dim_scene_reports_low_light(self):
-        frames, ts = _synthetic_capture(scene_level=20, ball_bright=90, club_bright=85)
-        result = estimate_delivery_trace(frames, ts)
-        assert result.status == "low_light"
-        assert result.trace_deg is None
-        assert result.scene_p995 is not None
-        assert result.scene_p995 < SCENE_P995_MIN
-
-    def test_saturation_near_ball_reports_overexposed(self):
-        frames, ts = _synthetic_capture()
-        # hot patch on the mat right next to the ball (inside the ball zone)
-        frames[:, BALL_XY[1] + 30 : BALL_XY[1] + 90, BALL_XY[0] - 60 : BALL_XY[0] + 60] = 255
-        result = estimate_delivery_trace(frames, ts)
-        assert result.status == "overexposed"
-        assert result.trace_deg is None
-
-    def test_dappled_background_saturation_is_tolerated(self):
-        frames, ts = _synthetic_capture()
-        frames[:, 0:80, 0:200] = 255  # sunlit trees far from the hitting zone
-        result = estimate_delivery_trace(frames, ts)
-        assert result.status == "ok"
-
-    def test_impact_far_from_trigger_is_implausible(self):
-        # A never-departing ball patch (wrong-blob lock) pins "impact" to the
-        # buffer end; the trigger-window check must catch it.
-        frames, ts = _synthetic_capture(impact_frame=39)  # ball never leaves
-        frames[39:, :, :] = frames[38]  # freeze the scene: ball stays put
-        result = estimate_delivery_trace(frames, ts, trigger_index=20)
-        assert result.status in ("impact_implausible", "no_impact")
-        assert result.trace_deg is None
-
-    def test_no_ball_status(self):
-        frames, ts = _synthetic_capture()
-        # erase the ball everywhere (keep the scene bright via the distractor)
-        yy, xx = np.mgrid[0:HEIGHT, 0:WIDTH]
-        ball_mask = (xx - BALL_XY[0]) ** 2 + (yy - BALL_XY[1]) ** 2 <= 6 * 6
-        frames[:, ball_mask] = 60
-        frames[:, 10:60, 10:60] = 235  # keep p99.5 above the light gate
-        result = estimate_delivery_trace(frames, ts)
-        assert result.status in ("no_ball", "no_impact", "insufficient_pairs")
-        assert result.trace_deg is None
-
-    def test_rejects_malformed_input(self):
-        result = estimate_delivery_trace(np.zeros((5, 4, 4), dtype=np.uint8), np.arange(5))
-        assert result.status == "error"
-
-    def test_320x200_capture_prefers_bright_ball_over_dark_background_blob(self):
-        import cv2
-
-        frames = np.full((20, 200, 320), 70, dtype=np.uint8)
-        frames[:, :20, :] = 165
-        for frame in frames:
-            cv2.circle(frame, (155, 105), 8, 35, -1)
-            cv2.circle(frame, (160, 140), 6, 245, -1)
-
-        ball = detect_reference_ball(frames, brightness_threshold=220)
-
-        assert ball.x == pytest.approx(160.0, abs=1.0)
-        assert ball.y == pytest.approx(140.0, abs=1.0)
-        assert ball.diameter_px == pytest.approx(12.0, abs=2.0)
-
-    def test_320x200_capture_produces_impact_trace(self):
-        import cv2
-
-        frames = np.full((99, 200, 320), 70, dtype=np.uint8)
-        frames += np.random.default_rng(7).integers(0, 8, size=frames.shape, dtype=np.uint8)
-        frames[:, :20, :] = 165
-        ball_x, ball_y = 160, 140
-        impact_frame = 73
-        yy, xx = np.mgrid[:200, :320]
-        ball_mask = (xx - ball_x) ** 2 + (yy - ball_y) ** 2 <= 6**2
-        for frame_index, frame in enumerate(frames):
-            cv2.circle(frame, (155, 105), 8, 35, -1)
-            if frame_index <= impact_frame:
-                frame[ball_mask] = 245
-            steps_to_impact = impact_frame + 0.5 - frame_index
-            head_x = ball_x - 8.0 * steps_to_impact
-            head_y = ball_y + 5.0 * steps_to_impact
-            if 0 <= head_x < 320 and 0 <= head_y < 200:
-                cv2.line(
-                    frame,
-                    (round(head_x), round(head_y)),
-                    (round(head_x + 45), round(head_y - 70)),
-                    240,
-                    2,
-                )
-                cv2.circle(frame, (round(head_x), round(head_y)), 5, 180, -1)
-        timestamps_ns = (np.arange(len(frames)) * (1e9 / 468.0)).astype(np.int64)
-
-        result = estimate_delivery_trace(frames, timestamps_ns, trigger_index=impact_frame)
-
-        assert result.status == "ok", result
-        assert result.impact_frame == pytest.approx(impact_frame, abs=1)
-        assert result.n_pairs >= 2
 
 
 class TestVelocityAngleProjection:

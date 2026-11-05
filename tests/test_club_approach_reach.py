@@ -17,13 +17,14 @@ import pytest
 
 from openflight.camera import club_delivery as cd
 
-# Oct 27 shot 1 at d737c51f: the club stage's head positions f40-f44 (lateral, up, forward m)
+# Oct 27 shot 1: the club stage's head positions f40-f44 (lateral, up, forward m) on the
+# heel-sole corner (G2 C1, 4 Nov 2026; d737c51f pinned the axis/sole point, which slid up to
+# 7 px along the sole against the hand-marked corner)
 PINNED = {
-    40: (-0.22584, 0.13377, 1.36219),
-    41: (-0.20519, 0.09478, 1.48487),
-    42: (-0.18607, 0.06456, 1.60515),
-    43: (-0.16582, 0.03627, 1.72434),
-    44: (-0.14914, 0.03119, 1.84267),
+    40: (-0.23446, 0.13478, 1.36071),
+    41: (-0.21002, 0.09524, 1.48419),
+    42: (-0.18116, 0.06203, 1.60572),
+    43: (-0.17397, 0.04104, 1.72359),
 }
 
 
@@ -41,7 +42,7 @@ def test_the_reach_is_the_approach_s_own_distance_within_the_bounds(before_s, ex
     assert cd.approach_reach_m(before_s, None) == pytest.approx(cd.HEAD_NEAR_BALL_M)
 
 
-def test_oct27_shot1_takes_f39_and_keeps_f40_to_f44():
+def test_oct27_shot1_takes_f39_and_keeps_f40_to_f43():
     from tests.test_camera_club_contact_tangent import _shot1_club  # noqa: PLC0415
 
     case = _shot1_club()
@@ -53,6 +54,7 @@ def test_oct27_shot1_takes_f39_and_keeps_f40_to_f44():
     }
 
     assert 39 in frames
+    assert 44 not in frames  # after contact: in no window (G2 C3)
     assert not any("seed frame 39" in note for note in result.notes)
     for frame, pinned in PINNED.items():
         assert frames[frame] == pytest.approx(pinned, abs=1e-4), frame

@@ -128,7 +128,13 @@ def camera_fused_label(shot: Shot, metric: str, source: str | None) -> tuple[str
         else shot.experimental_fused_attack_angle_confidence
     )
     intrinsics = shot.camera_lens_intrinsics
-    return camera_club_label(tier, intrinsics, source), camera_club_note(tier, intrinsics, source)
+    # G2 C4: the club stage's range evidence says whether the head's depth was measured
+    stage = (shot.camera_fusion_processing or {}).get("club_delivery") or {}
+    depth = stage.get("range_evidence_status") if isinstance(stage, dict) else None
+    return (
+        camera_club_label(tier, intrinsics, source, depth_status=depth),
+        camera_club_note(tier, intrinsics, source, depth_status=depth),
+    )
 
 
 def _club_path_frame_of(shot: Shot, path_source: str | None) -> str | None:
@@ -204,13 +210,6 @@ def attack_angle_resolution(shot: Shot) -> Resolution:
 
     def camera_fused():
         if head_track or not _finite(fused):
-            # the club stage's own reason when it withheld the attack on purpose (C22c)
-            delivery = (getattr(shot, "camera_fusion_processing", None) or {}).get(
-                "club_delivery"
-            ) or {}
-            reason = delivery.get("attack_reason") if isinstance(delivery, dict) else None
-            if reason:
-                return str(reason)
             return f"no camera fused attack ({shot.experimental_fused_status or 'not run'})"
         if _fused_rejected(shot):
             return f"camera fusion {shot.experimental_fused_status}"

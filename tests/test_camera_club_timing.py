@@ -115,7 +115,8 @@ def test_an_arrival_stall_leaves_the_delivery_unchanged(monkeypatch, range_evide
 
     assert during_stall == steady
     assert seen == steady_times
-    assert steady_times[0][0] == pytest.approx(tuple(sensor[[38, 41]] / 1e9))
+    # the preferred window ends at the last rest frame (G2 C3: (-3, 0), never past contact)
+    assert steady_times[0][0] == pytest.approx(tuple(sensor[[37, 40]] / 1e9))
     assert steady.status != "rejected_no_impact"
 
 
@@ -136,7 +137,7 @@ def test_a_clip_without_sensor_timestamps_still_times_by_arrival(monkeypatch):
         ),
     )
 
-    assert seen[0][0] == pytest.approx(tuple(stalled[[38, 41]] / 1e9))
+    assert seen[0][0] == pytest.approx(tuple(stalled[[37, 40]] / 1e9))  # G2 C3
 
 
 @pytest.mark.parametrize("path", ["replay", "live"])

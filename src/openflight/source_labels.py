@@ -159,26 +159,54 @@ def lens_calibrated(intrinsics: Optional[str]) -> bool:
     return intrinsics == INTRINSICS_CALIBRATED
 
 
+# G2 C4 (4 Nov 2026): the club stage's range evidence when no IWR club walk was accepted:
+# the located tee + the OPS club speed (camera.ball_flight.LocatedTeeRangeEvidence.status).
+# The head's depth and forward speed are then assumed, not measured, so a camera club value
+# on it is at best estimated, with this reason.
+ASSUMED_DEPTH_STATUSES = frozenset({"accepted_located_tee"})
+ASSUMED_DEPTH_NOTE = "depth from tee range + OPS club speed (not measured)"
+
+
+def depth_assumed(depth_status: Optional[str]) -> bool:
+    """Whether the club stage's range evidence status is an assumed depth."""
+    return depth_status in ASSUMED_DEPTH_STATUSES
+
+
 def camera_club_label(
-    tier: Optional[str], intrinsics: Optional[str], source: Optional[str] = None
+    tier: Optional[str],
+    intrinsics: Optional[str],
+    source: Optional[str] = None,
+    *,
+    depth_status: Optional[str] = None,
 ) -> str:
     """The label of a camera club value (fused path or attack) or a camera-assisted
-    horizontal: measured on the high tier through a calibrated lens, estimated on the high
-    tier through a nominal one, else experimental (a weaker tier, or camera + OPS)."""
+    horizontal: measured on the high tier through a calibrated lens over a measured depth,
+    estimated on the high tier through a nominal lens or over an assumed depth
+    (``ASSUMED_DEPTH_STATUSES``), else experimental (a weaker tier, or camera + OPS)."""
     if source == CAMERA_FUSED_OPS_SOURCE or tier != CAMERA_HIGH_TIER:
         return LABEL_EXPERIMENTAL
+    if depth_assumed(depth_status):
+        return LABEL_ESTIMATED
     return LABEL_MEASURED if lens_calibrated(intrinsics) else LABEL_ESTIMATED
 
 
 def camera_club_note(
-    tier: Optional[str], intrinsics: Optional[str], source: Optional[str] = None
+    tier: Optional[str],
+    intrinsics: Optional[str],
+    source: Optional[str] = None,
+    *,
+    depth_status: Optional[str] = None,
 ) -> Optional[str]:
     """Why a camera club value is weaker than measured (``camera_club_label``), or None."""
     if source == CAMERA_FUSED_OPS_SOURCE:
         return "camera + OPS delivery: no IWR depth under the club (experimental)"
     if tier != CAMERA_HIGH_TIER:
-        return f"camera confidence tier {tier or 'unknown'}, not high (experimental)"
-    return None if lens_calibrated(intrinsics) else NOMINAL_LENS_NOTE
+        note = f"camera confidence tier {tier or 'unknown'}, not high (experimental)"
+    else:
+        note = None if lens_calibrated(intrinsics) else NOMINAL_LENS_NOTE
+    if depth_assumed(depth_status):
+        note = f"{ASSUMED_DEPTH_NOTE}; {note}" if note else ASSUMED_DEPTH_NOTE
+    return note
 
 
 def launch_label(

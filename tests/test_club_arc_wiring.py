@@ -123,7 +123,7 @@ def test_chained_delivery_records_head_positions_on_the_camera_clock(monkeypatch
     assert result.contact_t_s == pytest.approx(CONTACT_S)
     assert result.clock == "host_timestamp_ns"
     frames = sorted(round(p.t_s * 1e9 / FRAME_NS) for p in result.head_positions)
-    assert frames == [36, 37, 38, 39, 40, 41]
+    assert frames == [36, 37, 38, 39, 40]  # G2 C3: the frame after contact is in no window
     for position in result.head_positions:
         truth = _head(position.t_s - CONTACT_S)
         measured = np.array([position.lateral_m, position.forward_m, position.up_m])
@@ -217,3 +217,51 @@ def test_a_head_track_delivery_is_experimental_and_names_its_source():
     assert "beyond +-15 deg" in attack["reason"]
     # the arc never fits it: no head positions
     assert payload["metrics"]["swing_plane_deg"]["status"] == "not_measured"
+
+
+def test_the_shot_record_carries_the_attack_sigma_as_its_range():
+    from openflight.camera import club_delivery as cd  # noqa: PLC0415
+    from openflight.club_arc import RANGE_SIGMAS, club_delivery_payload  # noqa: PLC0415
+    from openflight.clubs import ClubType  # noqa: PLC0415
+    from tests.test_camera_club_contact_tangent import _shot1_club  # noqa: PLC0415
+
+    # G2 C2: the shot record's attack angle carries the stage's propagated sigma
+    case = _shot1_club()
+    result = cd.estimate_chained_delivery(case["frames"], case["host"], **case["kwargs"])
+    entry = club_delivery_payload(result, club=ClubType.IRON_7, handedness="RH")["metrics"][
+        "attack_angle_deg"
+    ]
+    sigma = result.attack_angle_sigma_deg
+    assert entry["sigma"] == pytest.approx(sigma)
+    assert entry["range"] == pytest.approx(
+        [
+            result.attack_angle_deg - RANGE_SIGMAS * sigma,
+            result.attack_angle_deg + RANGE_SIGMAS * sigma,
+        ],
+        abs=0.01,
+    )
+
+
+def test_path_attack_and_plane_on_the_located_tee_depth_say_it_is_assumed():
+    # G2 C4: no IWR club walk on Oct 27 shot 1: the depth is the located tee + OPS club speed
+    from openflight.camera import club_delivery as cd  # noqa: PLC0415
+    from openflight.clubs import ClubType  # noqa: PLC0415
+    from openflight.source_labels import ASSUMED_DEPTH_NOTE  # noqa: PLC0415
+    from tests.test_camera_club_contact_tangent import _shot1_club  # noqa: PLC0415
+
+    case = _shot1_club()
+    result = cd.estimate_chained_delivery(case["frames"], case["host"], **case["kwargs"])
+    assert result.range_evidence_status == "accepted_located_tee"
+    payload = club_arc.club_delivery_payload(result, club=ClubType.IRON_7, handedness="RH")
+    metrics = payload["metrics"]
+    assert result.path_confidence_tier == "high"
+    assert metrics["club_path_deg"]["status"] == "estimated"  # measured on a measured depth
+    # the attack angle's own tier (its sigma) is weaker still: experimental
+    assert metrics["attack_angle_deg"]["status"] == (
+        "estimated" if result.attack_confidence_tier == "high" else "experimental"
+    )
+    for name in ("club_path_deg", "attack_angle_deg"):
+        assert ASSUMED_DEPTH_NOTE in metrics[name]["reason"], name
+    for name in ("swing_plane_deg", "swing_direction_deg"):
+        assert metrics[name]["status"] == "experimental", name  # weaker than estimated
+        assert ASSUMED_DEPTH_NOTE in metrics[name]["note"], name
