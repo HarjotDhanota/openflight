@@ -599,12 +599,19 @@ class SessionLogger:
         ball_range: Optional[Dict[str, Any]] = None,
         gate_event: Optional[Dict[str, Any]] = None,
         partial_capture: Optional[Dict[str, Any]] = None,
+        dump_transfer_timing: Optional[Dict[str, Any]] = None,
+        gate_to_request_ns: Optional[int] = None,
+        gate_to_request_uncertainty_ns: Optional[int] = None,
     ):
         """Log the TI raw-dump reference and complete LCMF evidence, with the shot's IWR ranges.
 
         ``capture_path`` only ever names a complete dump. A transfer that failed
         keeps its bytes in ``partial_capture`` (a ``.partial.l3dump`` path, its
         bytes, the size its header declares, ``complete``), never in the capture.
+        ``dump_transfer_timing`` holds the transfer's absolute host monotonic marks
+        (``request_written_ns`` .. ``cli_ready_ns``); ``gate_to_request_ns`` is the
+        request after the GATE's kernel tick interval midpoint, +- the interval's
+        half-width ``gate_to_request_uncertainty_ns``.
         """
         if not self.enabled:
             return
@@ -634,6 +641,9 @@ class SessionLogger:
                 "launch_range": launch_range,
                 "ball_range": ball_range,
                 "gate_event": gate_event,
+                "dump_transfer_timing": dump_transfer_timing,
+                "gate_to_request_ns": gate_to_request_ns,
+                "gate_to_request_uncertainty_ns": gate_to_request_uncertainty_ns,
                 "runtime_config_sha256": runtime_config_sha256,
             },
         )

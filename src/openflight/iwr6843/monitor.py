@@ -14,7 +14,7 @@ from typing import Callable
 
 from openflight.gate_timing import GateEvent, read_edge_tick, warm_edge_reading_cache
 from openflight.gpio_factory import ensure_lgpio_pin_factory
-from openflight.iwr6843.driver import IWR6843DumpRecoveryError, IWR6843Radar
+from openflight.iwr6843.driver import DumpTransferTiming, IWR6843DumpRecoveryError, IWR6843Radar
 from openflight.iwr6843.dump import (
     HEADER,
     PARTIAL_DUMP_SUFFIX,
@@ -68,6 +68,37 @@ class IWR6843Capture:
     partial_expected_nbytes: int | None = None
     # those bytes, for the runtime's partial decoder (``partial_dump``) whether saved or not
     partial_raw: bytes | None = field(default=None, repr=False)
+    # absolute host ``time.monotonic_ns`` marks of the transfer, failed or not; None from a
+    # radar that cannot time its reads
+    dump_transfer_timing: DumpTransferTiming | None = None
+
+    @property
+    def gate_to_request_ns(self) -> int | None:
+        """The ``l3dump`` request after the GATE's kernel tick interval midpoint.
+
+        None unless both the request mark and a qualified kernel interval exist; the
+        interval's half-width is ``gate_to_request_uncertainty_ns``.
+        """
+        interval = self._gate_interval_ns()
+        if interval is None:
+            return None
+        low, high = interval
+        return self.dump_transfer_timing.request_written_ns - (low + high) // 2
+
+    @property
+    def gate_to_request_uncertainty_ns(self) -> int | None:
+        """Half the kernel tick interval, rounded up so it covers the interval."""
+        interval = self._gate_interval_ns()
+        if interval is None:
+            return None
+        low, high = interval
+        return (high - low + 1) // 2
+
+    def _gate_interval_ns(self) -> tuple[int, int] | None:
+        timing = self.dump_transfer_timing
+        if timing is None or timing.request_written_ns is None or self.gate_event is None:
+            return None
+        return self.gate_event.kernel_mono_interval_ns
 
     @property
     def valid(self) -> bool:
@@ -350,14 +381,19 @@ class IWR6843CaptureMonitor:
             partial_path = None
             uart_started_ns = None
             uart_completed_ns = None
+            transfer_timing = None
             try:
                 logger.info(
                     "[IWR6843] Trigger #%d: dumping firmware-frozen L3 ring",
                     sequence,
                 )
                 uart_started_ns = time.monotonic_ns()
+                read_dump_timed = getattr(self.radar, "read_dump_timed", None)
                 try:
-                    raw = self.radar.read_dump()
+                    if read_dump_timed is not None:
+                        raw, transfer_timing = read_dump_timed()
+                    else:
+                        raw = self.radar.read_dump()
                 finally:
                     uart_completed_ns = time.monotonic_ns()
                 metadata = self._validate_dump(raw)
@@ -367,6 +403,7 @@ class IWR6843CaptureMonitor:
             except IWR6843DumpRecoveryError as exc:
                 error = str(exc)
                 raw = None
+                transfer_timing = exc.timing
                 partial = bytes(exc.raw or b"")
                 partial_path = self._save_partial(sequence, edge_timestamp, partial)
                 logger.warning(
@@ -404,6 +441,7 @@ class IWR6843CaptureMonitor:
                 partial_nbytes=len(partial),
                 partial_expected_nbytes=declared_dump_nbytes(partial) if partial else None,
                 partial_raw=partial or None,
+                dump_transfer_timing=transfer_timing,
             )
             with self._condition:
                 # duration first: the ready light reads these without the lock

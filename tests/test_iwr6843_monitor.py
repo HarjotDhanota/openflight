@@ -609,9 +609,11 @@ def test_the_monitor_reads_dumps_through_its_own_serial_process(tmp_path, monkey
         assert monitor.port == "/dev/fake-iwr6843"
         assert monitor.ready_snapshot()["serial_open"]
         edge = time.time()
+        edge_mono_ns = time.monotonic_ns()
         assert monitor.notify_trigger(edge)
 
         capture = monitor.capture_for_shot(edge, timeout_s=15.0)
+        returned_mono_ns = time.monotonic_ns()
     finally:
         monitor.stop()
 
@@ -619,4 +621,8 @@ def test_the_monitor_reads_dumps_through_its_own_serial_process(tmp_path, monkey
     assert capture.raw == line.make_dump(4)
     assert capture.path.read_bytes() == capture.raw
     assert capture.uart_transport_duration_ns > 0
+    # the serial process's marks are absolute on this process's monotonic clock
+    timing = capture.dump_transfer_timing
+    assert timing is not None
+    assert edge_mono_ns <= timing.request_written_ns <= timing.cli_ready_ns <= returned_mono_ns
     assert not monitor.ready_snapshot()["serial_open"]

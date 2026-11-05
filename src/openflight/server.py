@@ -5164,6 +5164,16 @@ def _attach_ball_range(shot: Shot, shot_result) -> None:
         shot.ball_range_reason = "the IWR runtime did not range this shot"
 
 
+def _iwr_transfer_timing_fields(capture) -> dict:
+    """The dump's absolute host monotonic marks and its latency after the GATE, else None."""
+    timing = getattr(capture, "dump_transfer_timing", None)
+    return {
+        "dump_transfer_timing": timing.to_dict() if timing is not None else None,
+        "gate_to_request_ns": getattr(capture, "gate_to_request_ns", None),
+        "gate_to_request_uncertainty_ns": getattr(capture, "gate_to_request_uncertainty_ns", None),
+    }
+
+
 def _process_iwr6843_angle(shot: Shot) -> float | None:
     """Apply a correlated LCMF result without risking the OPS shot."""
     if iwr6843_runtime is None or shot.mode == "mock":
@@ -5255,6 +5265,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                 partial_capture=(
                     getattr(capture, "partial_capture", None) if capture is not None else None
                 ),
+                **_iwr_transfer_timing_fields(capture),
                 runtime_config_sha256=(
                     iwr_runtime_config_snapshot["sha256"]
                     if iwr_runtime_config_snapshot is not None
