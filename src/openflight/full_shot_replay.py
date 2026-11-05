@@ -232,6 +232,7 @@ def _runtime(inputs):
 
 
 def _impact(shot, capture, config, session_uuid):
+    from openflight import server  # noqa: PLC0415
     from openflight.camera.impact_live import START_KEYS, LiveAnalyser  # noqa: PLC0415
 
     if capture is None or shot.handed not in ("RH", "LH"):
@@ -244,7 +245,7 @@ def _impact(shot, capture, config, session_uuid):
             "session_uuid": session_uuid,
             "shot_number": shot.shot_number,
             "clip_path": str(capture.path),
-            "shot": shot.to_dict(),
+            "shot": server.shot_to_dict(shot),
             "start": {key: deepcopy(config[key]) for key in START_KEYS if key in config},
             "handedness": "right" if shot.handed == "RH" else "left",
         }
@@ -377,7 +378,7 @@ def replay_full_shot(
                 errors["impact"] = f"impact producer failed: {type(error).__name__}"
                 impact, performance = {"status": "rejected", "reason": errors["impact"]}, {}
             shot.impact_location = impact
-            produced = shot.to_dict()
+            produced = server.shot_to_dict(shot)
             return {
                 **identity,
                 "status": "partial" if errors or shot.stage_errors else "replayed",

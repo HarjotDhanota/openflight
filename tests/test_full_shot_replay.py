@@ -4,7 +4,8 @@ import json
 
 import pytest
 
-from openflight import shot_metrics
+from openflight import full_shot_replay, server, shot_metrics
+from openflight.camera.impact_live import LiveAnalyser
 from scripts.analysis import analyze_tester_session as runner, replay_raw_fusion
 from tests import session_fixtures as signals
 
@@ -82,3 +83,27 @@ def test_raw_benchmark_call_does_not_implicitly_run_full_pipeline(tmp_path):
     args = runner._replay_args(session, 1, root)
     args.full_shot = False
     assert "full_shot" not in replay_raw_fusion.replay(args)["stages"]
+
+
+def test_impact_and_final_metrics_use_production_publication_serialization(tmp_path, monkeypatch):
+    root, session = prepared_signals(tmp_path)
+    shots, jobs = [], []
+    produce_ops = full_shot_replay._fresh_ops
+
+    def retain_fresh_shot(*args):
+        shot = produce_ops(*args)
+        shots.append(shot)
+        return shot
+
+    def analyse(_self, job):
+        expected = server.shot_to_dict(shots[-1])
+        assert job["shot"] == expected
+        assert job["shot"]["ball_speed_mph"] == 100.7
+        jobs.append(job)
+        return {"status": "rejected", "reason": "known-answer impact job boundary"}
+
+    monkeypatch.setattr(full_shot_replay, "_fresh_ops", retain_fresh_shot)
+    monkeypatch.setattr(LiveAnalyser, "analyse", analyse)
+    fresh = replay_raw_fusion.replay(runner._replay_args(session, 1, root))["stages"]["full_shot"]
+    assert jobs and "impact" not in fresh["errors"]
+    assert fresh["metrics"] == server.shot_to_dict(shots[-1])["metrics"]
