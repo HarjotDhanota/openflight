@@ -248,6 +248,7 @@ def test_native_capture_enters_existing_ops_parser_without_an_invented_epoch(tmp
     from openflight.rolling_buffer.processor import RollingBufferProcessor
 
     owner = object.__new__(NativeFusionExtension)
+    owner.attempt_lock = threading.Lock()
     owner.publishing, owner.sequence = False, 0
     owner.collector, owner.camera = object(), object()
     owner.files = SimpleNamespace(
@@ -300,6 +301,7 @@ def test_pending_fusion_release_requires_the_same_attempt():
     import threading
 
     owner = object.__new__(NativeFusionExtension)
+    owner.attempt_lock = threading.Lock()
     owner.association = {"event_id": "current"}
     owner.finished = threading.Event()
     owner.after_shot_published(

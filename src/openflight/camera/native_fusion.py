@@ -213,6 +213,7 @@ class NativeFusionExtension(KioskExtension):
         self.closed, self.worker_alive, self.publishing = False, False, False
         self.finished = threading.Event()
         self.finished.set()
+        self.attempt_lock = threading.Lock()
         self.sequence = 0
         self.current_attempt = None
         self.original_camera_match = None
@@ -319,8 +320,9 @@ class NativeFusionExtension(KioskExtension):
                     raise TimeoutError("previous shot did not finish; do not reuse its captures")
                 time.sleep(0.05)
             self.publishing = False
-        self.iwr_capture = self.camera_path = self.association = None
-        self.trigger_evidence = None
+        with self.attempt_lock:
+            self.iwr_capture = self.camera_path = self.association = None
+            self.trigger_evidence = None
         self.files.publish(
             "next",
             message="Remove the ball, leave the hitting area empty, then prepare the next attempt.",
@@ -330,7 +332,8 @@ class NativeFusionExtension(KioskExtension):
                 raise InterruptedError("session stopped")
         self.sequence += 1
         folder = self.files.folder / f"attempt-{self.sequence:03d}"
-        self.current_attempt = folder
+        with self.attempt_lock:
+            self.current_attempt = folder
         self.worker_alive = True
 
         def cancelled():
@@ -373,7 +376,8 @@ class NativeFusionExtension(KioskExtension):
         capture.trigger_type, capture.trigger_timestamp = "hardware", None
         capture.trigger_timestamp_source = "unavailable_unqualified_native_sample_mapping"
         capture.capture_id = association.get("event_id")
-        self.camera_path, self.association = camera_path, association
+        with self.attempt_lock:
+            self.camera_path, self.association = camera_path, association
         if camera_path is not None:
             timing = result["iwr_raw"]["transfer_timing"]
             duration = timing["cli_ready_ns"] - timing["request_written_ns"]
@@ -464,9 +468,10 @@ class NativeFusionExtension(KioskExtension):
 
     def after_shot_published(self, shot, *, update_kind):
         """Release acquisition only after this shot's final normal pipeline output."""
-        if shot.extras.get("native_sensor_timing") == self.association:
-            self.record_stage("published", shot)
-            self.finished.set()
+        with self.attempt_lock:
+            if self.association and shot.extras.get("native_sensor_timing") == self.association:
+                self.record_stage("published", shot)
+                self.finished.set()
 
     def ready_light_states(self, states):
         """Keep native setup and processing instructions on the normal readiness light."""

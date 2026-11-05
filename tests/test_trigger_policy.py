@@ -152,6 +152,7 @@ def test_free_play_offers_the_five_architectures_and_explains_each_block(tmp_pat
 @pytest.mark.parametrize("fault", [None, "partial", "changed_raw"])
 def test_actual_acquisition_policy_differs_without_delaying_retention(tmp_path, selected, fault):
     owner = object.__new__(NativeFusionExtension)
+    owner.attempt_lock = threading.Lock()
     owner.policy = policy.snapshot(selected)
     owner.publishing, owner.sequence = False, 0
     owner.collector, owner.camera = object(), object()
