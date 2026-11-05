@@ -49,6 +49,10 @@ def test_one_action_replays_reviews_and_bundles_every_shot(tmp_path, viewer):
     camera = report["stages"]["camera"]
     assert camera["recorded_context"]["matches_recorded"] is None
     assert camera["recomputed_radar_context"]["status"] == "replayed"
+    full = report["stages"]["full_shot"]
+    assert len(full["metrics"]) == 37
+    assert full["session_uuid"] == report["session_uuid"]
+    assert full["shot_number"] == 1
     derived = "".join(
         path.read_text(encoding="utf-8") for path in (root / TESTER / "analysis").rglob("*.json")
     )
@@ -65,6 +69,8 @@ def test_one_action_replays_reviews_and_bundles_every_shot(tmp_path, viewer):
         assert metrics[key]["status"] in ("accepted", "experimental", "rejected"), metrics[key]
         assert metrics[key]["source"] == "camera_replay:replayed_radar_context"
     assert metrics["ball_speed_mph"]["value"] > 95
+    assert len(review["attempts"][0]["replayed_kiosk_metrics"]) == 37
+    assert review["attempts"][0]["replayed_impact"] == full["impact"]
     assert review["attempts"][0]["evidence"]["impact_photo"] == f"{TESTER}/impact/camera_001.pgm"
     assert (root / TESTER / "analysis" / "attempts.csv").is_file()
     assert (root / TESTER / "analysis" / "report.md").is_file()

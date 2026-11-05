@@ -27,6 +27,7 @@ import threading
 import time
 import traceback
 from argparse import Namespace
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -52,7 +53,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 VIEWER = REPO_ROOT / "ui" / "public" / "session-review.html"
 JOB_SCHEMA = "openflight.analysis_job.v1"
 HEARTBEAT_S = 5.0
-ANALYSER = "analyze_tester_session.v1"
+ANALYSER = "analyze_tester_session.v2-full-shot"
 REPLACE_ATTEMPTS = 50
 PROGRESS_INTERVAL_S = 0.5
 REPLAY_INDEX = ".replay-index.json"
@@ -184,6 +185,7 @@ def _replay_args(session: Path, shot: int, path_root: Path) -> Namespace:
         iwr_radar_height_m=None,
         ball_height_m=0.040,
         camera=True,
+        full_shot=True,
         camera_capture=None,
         output=None,
         path_root=path_root,
@@ -191,12 +193,22 @@ def _replay_args(session: Path, shot: int, path_root: Path) -> Namespace:
 
 
 def _failed_report(session_uuid: Any, shot: int, message: str) -> dict[str, Any]:
+    from openflight.full_shot_replay import unavailable  # noqa: PLC0415
+
     stage = {"status": "error", "error": message}
     return {
         "schema_version": 1,
         "session_uuid": session_uuid,
         "shot_number": shot,
-        "stages": {name: dict(stage) for name in ("ops", "iwr6843", "camera")},
+        "stages": {
+            **{name: dict(stage) for name in ("ops", "iwr6843", "camera")},
+            "full_shot": {
+                **unavailable(message),
+                "session_uuid": session_uuid,
+                "shot_number": shot,
+                "source_published": None,
+            },
+        },
     }
 
 
@@ -285,7 +297,7 @@ def replay_all(sessions_root: Path, tester_id: str, job: Job, software: str | No
             continue
         for shot in shots:
             target = replay_report_path(analysis_dir, arm_id, run.name, shot)
-            key = f"{frozen[0]}:{software}:{shot}:{_capture_identity(frozen[2], shot, session)}"
+            key = f"{ANALYSER}:{frozen[0]}:{software}:{shot}:{_capture_identity(frozen[2], shot, session)}"
             job.update(
                 progress={
                     "done": done,
@@ -414,6 +426,9 @@ def _without_software_identity(document: dict[str, Any], name: str) -> dict[str,
         ]
         return document
     document.pop("analysis", None)
+    if isinstance(document.get("stages", {}).get("full_shot"), dict):
+        document = deepcopy(document)
+        document["stages"]["full_shot"].pop("performance", None)
     document["source_identity"] = _software_free(document.get("source_identity"))
     return document
 

@@ -283,6 +283,7 @@ def replay(args, *, frozen_session=None) -> dict:
         args.session, args.shot, frozen_session=frozen_session
     )
     iwr_measurement = None
+    full_iwr_inputs = None
     iwr_club_path = None
     moving_iwr_series = None
     camera_context = None
@@ -542,6 +543,18 @@ def replay(args, *, frozen_session=None) -> dict:
                 and recorded_bytes != len(raw)
             ):
                 raise ValueError("IWR raw capture byte count differs from the session event")
+            if (
+                embedded_runtime_hash == canonical_runtime_hash
+                or recorded_runtime_hash == canonical_runtime_hash
+            ):
+                full_iwr_inputs = {
+                    "runtime": runtime_config,
+                    "event": capture_event,
+                    "raw": raw,
+                    "path": capture_path,
+                    "calibration": calibration,
+                    "tx_order": tx_order,
+                }
             ops_result = report["stages"]["ops"].get("result")
             ball_speed = ops_result.get("ball_speed_mph") if isinstance(ops_result, dict) else None
             if isinstance(ball_speed, bool) or not isinstance(ball_speed, (int, float)):
@@ -741,6 +754,30 @@ def replay(args, *, frozen_session=None) -> dict:
             "promotion_allowed": False,
             "independent_camera_support": False,
         }
+    from openflight.full_shot_replay import replay_full_shot, unavailable  # noqa: PLC0415
+
+    if getattr(args, "full_shot", False):
+        try:
+            report["stages"]["full_shot"] = replay_full_shot(
+                events,
+                number=args.shot,
+                session_dir=session_dir,
+                ops_stage=report["stages"]["ops"],
+                sample_rate=sample_rate_hz,
+                club=club,
+                iwr_inputs=full_iwr_inputs,
+                include_camera=args.camera,
+            )
+        except Exception as error:
+            detail = str(error).replace(str(session_dir), "<session>")
+            report["stages"]["full_shot"] = {
+                **unavailable(
+                    f"full shot inputs or producer refused: {type(error).__name__}: {detail}"
+                ),
+                "session_uuid": session_start["session_uuid"],
+                "shot_number": args.shot,
+                "source_published": bool(shot_event),
+            }
     return report
 
 
@@ -803,6 +840,11 @@ def parser():
         help="Override the club recorded in the capture's processor config",
     )
     result.add_argument("--camera", action="store_true")
+    result.add_argument(
+        "--full-shot",
+        action="store_true",
+        help="Recompute full shot models and impact from the requested raw sensor stages",
+    )
     result.add_argument("--camera-capture", type=Path)
     result.add_argument("--projection-manifest", type=Path)
     result.add_argument("--iwr", action="store_true")
