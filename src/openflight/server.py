@@ -9630,8 +9630,18 @@ def build_parser():
         "--iwr6843-output-dir",
         default=None,
         help=(
-            "Raw TI dump directory, used when --debug or cloud raw uploads "
-            "(openflight-cloud raw on) are enabled (default: <session-log-dir>/iwr6843)"
+            "Raw TI dump directory, used while raw dumps are saved "
+            "(default: <session-log-dir>/iwr6843)"
+        ),
+    )
+    parser.add_argument(
+        "--iwr6843-save-dumps",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Save every shot's raw TI .l3dump (default: on; offline timing and replay "
+            "need it). --no-iwr6843-save-dumps keeps them in memory only, unless --debug "
+            "or cloud raw uploads (openflight-cloud raw on) need them on disk"
         ),
     )
     parser.add_argument(
@@ -10045,6 +10055,7 @@ def main():
             )
             / "iwr6843"
         )
+        iwr_save_dumps = bool(args.iwr6843_save_dumps or args.debug or _cloud_raw_uploads_enabled())
         if init_iwr6843(
             port=args.iwr6843_port,
             config_path=args.iwr6843_config,
@@ -10059,8 +10070,8 @@ def main():
             radar_height_m=enclosure.radar_height_m,
             ball_height_m=args.iwr6843_ball_height_m,
             horizontal_phase_reference_rad=args.iwr6843_horizontal_phase_reference_rad,
-            # Raw cloud uploads need the dumps on disk to send them.
-            save_dumps=args.debug or _cloud_raw_uploads_enabled(),
+            # Offline timing and raw cloud uploads need the dumps on disk.
+            save_dumps=iwr_save_dumps,
             # the rig's camera axis, else downrange, until the setup's side offset applies
             lateral_tee_offset_m=_rig_tee_lateral_offset_m(),
             board_rotation_deg=enclosure.iwr_board_rotation_deg,
@@ -10069,8 +10080,8 @@ def main():
                 "IWR6843 enabled (LCMF launch angle, "
                 f"BCM{args.iwr6843_trigger_pin}, {iwr6843_runtime.tx_order} TX order)"
             )
-            if args.debug:
-                print(f"IWR6843 raw dumps enabled: {iwr_output_dir}")
+            if iwr_save_dumps:
+                print(f"IWR6843 raw dumps saved to: {iwr_output_dir}")
             startup_status.ready("ti", "TI radar connected")
         elif iwr_optional := kiosk_extensions.first("iwr_optional"):
             startup_status.skip("ti", f"Distance radar unavailable; {iwr_optional}")

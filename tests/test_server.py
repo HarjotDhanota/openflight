@@ -574,6 +574,45 @@ class TestIWR6843ShotIntegration:
         assert snapshot["radar_config"]["source_text"].encode() == config_path.read_bytes()
         server_module.iwr6843_runtime = None
 
+    def test_session_start_says_whether_raw_dumps_are_saved(self, monkeypatch, tmp_path):
+        captured = {}
+
+        class FakeCaptureMonitor:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+                self.port = "/dev/ttyUSB0"
+
+            def start(self, *, armed=True):
+                return None
+
+        monkeypatch.setattr(Calibration, "load", lambda _path: Calibration.identity())
+        monkeypatch.setattr("openflight.iwr6843.monitor.IWR6843CaptureMonitor", FakeCaptureMonitor)
+        monkeypatch.setattr("openflight.iwr6843.monitor.tx_order_from_config", lambda _p: "normal")
+        monkeypatch.setattr(server_module, "iwr6843_runtime_config", {"enabled": False})
+        config_path = tmp_path / "snapshot.cfg"
+        calibration_path = tmp_path / "cal.json"
+        config_path.write_text("profileCfg 0\n", encoding="utf-8")
+        calibration_path.write_text("{}", encoding="utf-8")
+
+        assert server_module.init_iwr6843(
+            port="/dev/ttyUSB0",
+            config_path=str(config_path),
+            calibration_path=str(calibration_path),
+            output_dir=tmp_path,
+            trigger_pin=17,
+            tee_range_m=None,
+            net_range_m=4.6,
+            tx_order="auto",
+            capture_timeout_s=12.0,
+            tilt_deg=10.0,
+            radar_height_m=0.051,
+            save_dumps=True,
+        )
+
+        assert captured["save_dumps"] is True
+        assert server_module._session_start_config()["iwr6843"]["raw_dump_saved"] is True
+        server_module.iwr6843_runtime = None
+
     def test_init_iwr6843_wires_horizontal_calibration_into_runtime(self, monkeypatch, tmp_path):
         """Horizontal calibration must reach IWR6843Runtime, not just be parsed.
 
@@ -5706,6 +5745,21 @@ class TestIwrTeeRangeConfiguration:
         assert received["net_range_m"] == server_module.DEFAULT_NET_RANGE_M
         assert "azimuth_offset_deg" not in received
         assert server_module.ball_speed_correction_enabled is True
+
+    def test_the_kiosk_saves_every_raw_dump_by_default(self, monkeypatch, tmp_path):
+        # offline timing of a shot needs its raw .l3dump; no --debug or cloud opt-in
+        monkeypatch.setattr(server_module, "_cloud_raw_uploads_enabled", lambda: False)
+
+        received = self._run_main_until_iwr_init(monkeypatch, tmp_path, [])
+
+        assert received["save_dumps"] is True
+
+    def test_raw_dumps_can_be_switched_off(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(server_module, "_cloud_raw_uploads_enabled", lambda: False)
+
+        received = self._run_main_until_iwr_init(monkeypatch, tmp_path, ["--no-iwr6843-save-dumps"])
+
+        assert received["save_dumps"] is False
 
     @pytest.mark.parametrize(
         ("profile", "message"),

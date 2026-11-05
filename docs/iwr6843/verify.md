@@ -9,8 +9,9 @@ capture looks right before hitting a full session.
 
 ## Start OpenFlight
 
-For the first run, use `--debug`. This retains each TI dump for inspection and
-offline replay. This example uses the Option A GPIO UART path. Replace the
+The kiosk keeps each TI dump for inspection, offline replay and offline timing
+(`--no-iwr6843-save-dumps` keeps them in memory only). For the first run, add
+`--debug` for verbose output. This example uses the Option A GPIO UART path. Replace the
 example geometry with your measurements:
 
 ```bash
