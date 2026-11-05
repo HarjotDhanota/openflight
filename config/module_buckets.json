@@ -1743,6 +1743,8 @@
   "tests/test_shot_stream.py": "PRODUCT",
   "tests/test_shot_stream_catch_up.py": "PRODUCT",
   "ui/src/components/panel/MetricGroupPanel.shotModels.test.tsx": "PRODUCT",
-  "ui/tests/metricPanelFixtures.ts": "PRODUCT"
+  "ui/tests/metricPanelFixtures.ts": "PRODUCT",
+  "src/openflight/camera/iwr_capture_plan.py": "TESTER",
+  "tests/test_iwr_capture_plan.py": "TESTER"
  }
 }

@@ -75,8 +75,11 @@ def test_ownership_failure_is_recorded_without_hiding_cleanup(monkeypatch):
     assert "fuser unavailable" in result["ownership_error"]
 
 
+@pytest.mark.parametrize("plan", ["default", "club51"])
 @pytest.mark.parametrize("stop_fails", [False, True])
-def test_attempt_saves_real_parser_output_and_original_bytes(tmp_path, monkeypatch, stop_fails):
+def test_attempt_saves_real_parser_output_and_original_bytes(
+    tmp_path, monkeypatch, stop_fails, plan
+):
     import threading
 
     import joint_clock_rig
@@ -85,7 +88,8 @@ def test_attempt_saves_real_parser_output_and_original_bytes(tmp_path, monkeypat
 
     from openflight.camera import capture_runtime
 
-    collector, port = wire()
+    collector, port = wire(capture_plan=plan)
+    port.ball_bin = 30  # inside both plans' pre windows
 
     class Rig:
         arm_id, boot_id, native_capture = "arm", "synthetic-boot", True
@@ -131,6 +135,11 @@ def test_attempt_saves_real_parser_output_and_original_bytes(tmp_path, monkeypat
     assert result["status"] == "partial"
     assert result["trace_attempt_id"] == "parser-attempt-trace"
     assert ("stop_error" in result) == stop_fails
+    assert result["iwr_capture_plan"] == collector.capture_plan
+    assert result["iwr_capture_plan"]["name"] == plan
+    sent = [row["command"] for row in result["iwr_exchanges"] if "command" in row]
+    phase = [line for line in result["iwr_capture_plan"]["commands"] if "phaseCapture" in line]
+    assert phase == [line for line in sent if line.startswith("phaseCaptureCfg")]
     assert collector.state["stop_verified"] != stop_fails
 
 
@@ -293,3 +302,66 @@ def test_iwr_master_asks_the_ops_for_one_capture_on_the_iwr_notice(
         assert "mode" not in built[0]
         assert requests == []
         assert result["ops_trigger_source"] == "native_speed"
+
+
+@pytest.mark.parametrize("plan", ["default", "club51"])
+def test_selected_capture_plan_reaches_the_collector_and_the_session_header(
+    tmp_path, monkeypatch, plan
+):
+    from contextlib import nullcontext
+
+    import tester_sync_session as session
+
+    built = []
+
+    class Collector:
+        rows = []
+        state = {}
+
+        def __init__(self, _handle, **kwargs):
+            built.append(kwargs["capture_plan"])
+            self.capture_plan = {"name": kwargs["capture_plan"], "commands": ["line"]}
+
+        def establish_fresh_runtime(self):
+            pass
+
+    helper = SimpleNamespace(
+        verify_package=lambda: {"source_fingerprint": "b" * 64},
+        require_unowned=lambda: None,
+        enhanced_port=lambda: "fake-port",
+        IWR6843DeviceLock=lambda _port: nullcontext(),
+        open_serial=lambda _port: nullcontext(SimpleNamespace()),
+        RamOnlyLoader=lambda _handle: SimpleNamespace(load_ram=lambda _raw: None),
+        startup=lambda _handle: b"startup",
+        boot_identity=lambda: "test-boot",
+    )
+    monkeypatch.setattr(session, "load_package", lambda _package, **_kwargs: helper)
+    monkeypatch.setattr(session, "resource_ownership", lambda: {"resources_released": True})
+    monkeypatch.setitem(
+        __import__("sys").modules, "joint_shot_clock", SimpleNamespace(ShotCollector=Collector)
+    )
+    (tmp_path / "clock.ram.bin").write_bytes(b"test-image")
+    files = SessionFiles(tmp_path / "session")
+    monkeypatch.setattr(files, "wait", lambda _phase: None)
+    with session.open_runtime(tmp_path, files, capture_plan=plan):
+        header = json.loads((files.folder / "status.json").read_text())
+        assert header["iwr_capture_plan"] == {"name": plan, "commands": ["line"]}
+    assert built == [plan]
+
+
+def test_capture_plan_flag_defaults_to_today_and_refuses_unknown_names(tmp_path, monkeypatch):
+    import sys
+
+    import tester_sync_session as session
+
+    runs = []
+    monkeypatch.setattr(session, "load_package", lambda *_a, **_kw: None)
+    monkeypatch.setattr(session, "run", lambda *args, **kwargs: runs.append((args, kwargs)))
+    base = ["tester_sync_session.py", "--clock-package", str(tmp_path), "--execute"]
+    for extra, expected in [([], "default"), (["--iwr-capture-plan", "club51"], "club51")]:
+        monkeypatch.setattr(sys, "argv", [*base, "--output", str(tmp_path / expected), *extra])
+        session.main()
+        assert runs[-1][1] == {"capture_plan": expected}
+    monkeypatch.setattr(sys, "argv", [*base, "--iwr-capture-plan", "club64"])
+    with pytest.raises(SystemExit):
+        session.main()

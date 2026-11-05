@@ -177,3 +177,34 @@ def test_server_restart_retains_last_session_and_restore_requirement(setup):
     )
     assert restarted.status()["session_id"] == controller.session
     assert restarted.status()["normal_boot_restore_needed"]
+
+
+@pytest.mark.parametrize("plan", [None, "default", "club51"])
+def test_start_passes_the_selected_iwr_capture_plan_to_the_session(tmp_path, plan):
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "MANIFEST.json").write_text("{}")
+    jobs = Jobs()
+    controller = InternalSyncController(
+        root=tmp_path / "sessions",
+        package=package,
+        jobs=jobs,
+        source=Path(__file__).parents[1],
+        release=lambda: None,
+        **({} if plan is None else {"capture_plan": plan}),
+    )
+    controller.start()
+    command = jobs.started[0][1][0]
+    assert command[command.index("--iwr-capture-plan") + 1] == (plan or "default")
+
+
+def test_unknown_iwr_capture_plan_is_refused_before_any_session(tmp_path):
+    with pytest.raises(ValueError, match="unknown IWR capture plan"):
+        InternalSyncController(
+            root=tmp_path / "sessions",
+            package=None,
+            jobs=Jobs(),
+            source=Path(__file__).parents[1],
+            release=lambda: None,
+            capture_plan="club64",
+        )

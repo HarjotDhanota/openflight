@@ -17,7 +17,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from openflight.camera import trigger_policy
+from openflight.camera import iwr_capture_plan, trigger_policy
 from openflight.kiosk_extensions import KioskExtension
 from openflight.ops_sync import analyze_recording
 from openflight.rolling_buffer.trigger import HardwareTriggeredCapture
@@ -158,7 +158,17 @@ class NativeFusionExtension(KioskExtension):
         """The native path is allowed only while this explicit owner is installed."""
         return True
 
-    def __init__(self, package, control, *, policy="independent", ops_pre_trigger_segments=None):
+    def __init__(
+        self,
+        package,
+        control,
+        *,
+        policy="independent",
+        ops_pre_trigger_segments=None,
+        capture_plan=iwr_capture_plan.DEFAULT,
+    ):
+        iwr_capture_plan.phase_line(capture_plan)  # refused before any firmware is loaded
+        self.capture_plan = capture_plan
         self.policy = trigger_policy.snapshot(policy, ops_pre_trigger_segments)
         if policy == "sound":
             raise ValueError("native acquisition cannot use sound policy")
@@ -193,12 +203,7 @@ class NativeFusionExtension(KioskExtension):
 
         atexit.register(server._cleanup_hardware_for_shutdown)  # pylint: disable=protected-access
         signal.signal(signal.SIGTERM, self.terminate)
-        self.collector = self.stack.enter_context(self.tools.open_runtime(self.package, self.files))
-        profile = importlib.import_module("joint_shot_clock").PROFILE
-
-        config = self.files.folder / "native-profile.cfg"
-        config.write_text("\n".join(profile) + "\n")
-        args.iwr6843_config = str(config)
+        args.iwr6843_config = str(self.open_collector())
         self.files.publish(
             "next",
             message="Remove the ball and leave the hitting area empty, then prepare an attempt.",
@@ -222,6 +227,15 @@ class NativeFusionExtension(KioskExtension):
                     json.dumps({"command": "next", "phase_token": payload["phase_token"]}) + "\n"
                 )
             return jsonify({"accepted": True})
+
+    def open_collector(self):
+        """Open the shared runtime on the selected plan; the kiosk decodes the same profile."""
+        self.collector = self.stack.enter_context(
+            self.tools.open_runtime(self.package, self.files, capture_plan=self.capture_plan)
+        )
+        config = self.files.folder / "native-profile.cfg"
+        config.write_text("\n".join(self.collector.profile) + "\n")
+        return config
 
     def camera_trigger_source(self):
         """The camera follows the OPS capture's GPIO edge, requested or native."""
@@ -443,6 +457,7 @@ class NativeFusionExtension(KioskExtension):
             "enabled": True,
             "physical_timing_qualified": False,
             "control_directory": str(self.files.folder),
+            "iwr_capture_plan": deepcopy(getattr(self.collector, "capture_plan", None)),
         }
         config["trigger_policy"] = deepcopy(self.policy)
         config["camera_capture"]["trigger_source"] = self.camera_trigger_source()

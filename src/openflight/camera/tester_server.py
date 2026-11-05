@@ -71,6 +71,7 @@ from openflight.camera.address_preview.pipeline import AddressPreviewPipeline
 from openflight.camera.auto_exposure import hitting_zone
 from openflight.camera.club_motion import detect_reference_ball
 from openflight.camera.fusion_diagnostics import register_fusion_diagnostics
+from openflight.camera.iwr_capture_plan import names as capture_plan_names
 from openflight.camera.paired_eligibility import evaluate_paired_capture
 from openflight.camera.patch_watch import PatchWatch
 from openflight.camera.reference_ball_range import (
@@ -8745,6 +8746,7 @@ def create_app(
     tester_control_port: int = 8765,
     bind_host: str = "127.0.0.1",
     internal_sync_clock_package: Path | None = None,
+    iwr_capture_plan: str = "default",
     package_manager: TesterJobManager | None = None,
     static_radar=None,
     camera_tilt_path: Path | None = None,
@@ -8961,6 +8963,7 @@ def create_app(
             jobs=jobs,
             source=REPO_ROOT,
             release=release_for_internal_sync,
+            capture_plan=iwr_capture_plan,
         ),
         REPO_ROOT / "ui/public/internal-sync.html",
     )
@@ -12173,7 +12176,12 @@ def create_app(
                     commands[0].append("--tester-geometry-unverified")
                 if mode == "native_internal":
                     native_control = native_free_play.configure_command(
-                        commands[0], internal_sync_clock_package, run_id, policy, ops_split
+                        commands[0],
+                        internal_sync_clock_package,
+                        run_id,
+                        policy,
+                        ops_split,
+                        capture_plan=iwr_capture_plan,
                     )
             busy = _range_resources_busy(live_yields=True)
             if busy:
@@ -13240,6 +13248,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="TESTER CAPTURE ONLY: enable the reviewed RAM IWR + native OPS + camera experiment",
     )
     parser.add_argument(
+        "--iwr-capture-plan",
+        choices=capture_plan_names(),
+        default="default",
+        help=(
+            "TESTER CAPTURE ONLY: the self-trigger IWR phaseCaptureCfg plan (only the pre "
+            "phase differs; club51 keeps 0.75-2.2 m for 51 ms before the trigger)"
+        ),
+    )
+    parser.add_argument(
         "--no-inclinometer", action="store_true", help="Leave the LIS3DH unread (not on a Pi)"
     )
     parser.add_argument("--inclinometer-address", type=lambda value: int(value, 0), default=0x18)
@@ -13328,6 +13345,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             tester_control_port=args.port,
             bind_host=args.host,
             internal_sync_clock_package=clock_package,
+            iwr_capture_plan=args.iwr_capture_plan,
             ball_hint_model=args.ball_hint_model,
             ball_hint_independent=args.ball_hint_independent,
             box_ball_locator=args.box_ball_locator,

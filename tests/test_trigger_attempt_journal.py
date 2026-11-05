@@ -53,6 +53,10 @@ def test_shared_collector_journals_partial_attempts_without_new_acquisition(
         state = {}
         port = object()
         host_boot = "boot"
+        capture_plan = {
+            "name": "default",
+            "commands": ["phaseCaptureCfg 20 53 9 32 53 7 47 53 47 8 1"],
+        }
 
         def begin(self):
             calls.append("iwr_begin")

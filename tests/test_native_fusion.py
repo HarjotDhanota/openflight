@@ -539,3 +539,118 @@ def test_each_native_attempt_saves_its_ops_buffer_coverage_with_the_split(tmp_pa
     assert saved["planned_history_before_request_ms"] == pytest.approx(12 * 128 / 30)
     assert saved["planned_after_request_ms"] == pytest.approx(20 * 128 / 30)
     assert saved["ball_first_ms"] == 40.0 and saved["ball_reaches_buffer_end"] is False
+
+
+@pytest.mark.parametrize("plan", ["default", "club51"])
+def test_native_kiosk_opens_the_selected_plan_and_processes_its_own_profile(tmp_path, plan):
+    from contextlib import ExitStack, contextmanager
+
+    from openflight.camera import iwr_capture_plan
+
+    profile = ("captureFormat iq16", iwr_capture_plan.phase_line(plan), "lowPower 0 0")
+    opened = []
+
+    @contextmanager
+    def open_runtime(package, files, *, capture_plan):
+        opened.append((package, capture_plan))
+        yield SimpleNamespace(profile=profile, capture_plan={"name": capture_plan})
+
+    owner = object.__new__(NativeFusionExtension)
+    owner.package, owner.capture_plan, owner.stack = tmp_path / "sealed", plan, ExitStack()
+    owner.files = SimpleNamespace(folder=tmp_path)
+    owner.tools = SimpleNamespace(open_runtime=open_runtime)
+    config = owner.open_collector()
+    assert opened == [(tmp_path / "sealed", plan)]
+    assert config.read_text() == "\n".join(profile) + "\n"
+    session = {"camera_capture": {}, "iwr6843": {}}
+    owner.policy = {"policy": "independent"}
+    owner.session_start_config(session)
+    assert session["native_sensor_timing"]["iwr_capture_plan"] == {"name": plan}
+
+
+def test_native_fusion_refuses_an_unknown_capture_plan_before_loading_firmware(tmp_path):
+    with pytest.raises(ValueError, match="unknown IWR capture plan"):
+        NativeFusionExtension(tmp_path, tmp_path, capture_plan="club64")
+
+
+@pytest.mark.parametrize("plan", [None, "club51"])
+def test_free_play_command_carries_the_capture_plan(tmp_path, plan):
+    command = ts.action_commands(
+        "free_play", params(), tmp_path, ts.DEFAULT_RIG_GEOMETRY, tester_setup=TESTER_SETUP
+    )[0][0]
+    configure_command(
+        command, tmp_path / "sealed", "a" * 32, **({} if plan is None else {"capture_plan": plan})
+    )
+    assert command[command.index("--tester-iwr-capture-plan") + 1] == (plan or "default")
+
+
+def _kiosk_parser():
+    import argparse
+
+    from openflight import tester_hooks
+
+    parser = argparse.ArgumentParser()
+    tester_hooks._add_arguments(parser)
+    parser.add_argument("--trigger")
+    parser.add_argument("--swing-speed")
+    for flag in ("--iwr6843", "--camera-capture", "--mock"):
+        parser.add_argument(flag, action="store_true")
+    return parser
+
+
+@pytest.mark.parametrize("plan", [None, "club51"])
+def test_the_kiosk_flag_hands_the_capture_plan_to_native_fusion(monkeypatch, tmp_path, plan):
+    from openflight import kiosk_extensions, tester_hooks
+    from openflight.camera import native_fusion
+
+    for name in ("tester_setup_required", "tester_config_hash", "study_mode_enabled"):
+        monkeypatch.setattr(tester_hooks, name, getattr(tester_hooks, name))
+    monkeypatch.setattr(tester_hooks, "free_play_config", {})
+    monkeypatch.setattr(tester_hooks.tester_page, "configure", lambda _port: None)
+    built = []
+    monkeypatch.setattr(
+        native_fusion,
+        "NativeFusionExtension",
+        lambda *_args, **kwargs: built.append(kwargs["capture_plan"]) or object(),
+    )
+    monkeypatch.setattr(kiosk_extensions, "register", lambda _extension: None)
+    argv = [
+        "--tester-free-play",
+        "--tester-setup-required",
+        "--tester-config-hash",
+        "h",
+        "--tester-id",
+        "t",
+        "--tester-run-id",
+        "r",
+        "--tester-native-sync-package",
+        str(tmp_path / "sealed"),
+        "--tester-native-sync-control",
+        str(tmp_path / "control"),
+        "--tester-trigger-policy",
+        "independent",
+        "--trigger",
+        "hardware",
+        "--iwr6843",
+        "--camera-capture",
+        *([] if plan is None else ["--tester-iwr-capture-plan", plan]),
+    ]
+    parser = _kiosk_parser()
+    tester_hooks._configure(parser.parse_args(argv), parser)
+    assert built == [plan or "default"]
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--tester-iwr-capture-plan", "club51"],
+        ["--tester-iwr-capture-plan", "club64"],
+    ],
+)
+def test_the_kiosk_refuses_a_capture_plan_without_native_fusion_or_unknown(monkeypatch, argv):
+    from openflight import tester_hooks
+
+    monkeypatch.setattr(tester_hooks, "free_play_config", {})
+    parser = _kiosk_parser()
+    with pytest.raises(SystemExit):
+        tester_hooks._configure(parser.parse_args(argv), parser)

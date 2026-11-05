@@ -5,7 +5,7 @@ from pathlib import Path
 
 from flask import jsonify, request
 
-from openflight.camera import trigger_policy
+from openflight.camera import iwr_capture_plan, trigger_policy
 from openflight.camera.internal_sync_routes import SESSION, InternalSyncController
 
 
@@ -15,11 +15,20 @@ def capture_mode(payload, action, package):
     return "sound" if policy == "sound" else "native_internal"
 
 
-def configure_command(command, package, run_id, policy="independent", ops_split=None):
+def configure_command(
+    command,
+    package,
+    run_id,
+    policy="independent",
+    ops_split=None,
+    *,
+    capture_plan=iwr_capture_plan.DEFAULT,
+):
     """Extend the actual kiosk command; preserve setup, optics, club and session paths."""
     run_dir = Path(command[command.index("--log-dir") + 1])
     control = run_dir / "native-sync" / run_id
     trigger_policy.validate(policy, package=package)
+    iwr_capture_plan.phase_line(capture_plan)
     split = trigger_policy.ops_split(policy, ops_split)
     command.extend(
         [
@@ -31,6 +40,8 @@ def configure_command(command, package, run_id, policy="independent", ops_split=
             str(control),
             "--tester-trigger-policy",
             policy,
+            "--tester-iwr-capture-plan",
+            capture_plan,
             "--camera-capture-pre-ms",
             "200",
             "--camera-capture-post-ms",

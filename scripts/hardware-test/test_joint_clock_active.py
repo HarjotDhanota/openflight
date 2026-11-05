@@ -305,3 +305,12 @@ def test_interrupted_lifecycle_reply_prevents_cleanup_writes(error_type):
     with pytest.raises(ExchangeError):
         collector.command("sensorStop")
     assert port.writes == [b"sensorStart\n"]
+
+
+def test_empty_lane_control_keeps_the_default_capture_plan():
+    from openflight.camera import iwr_capture_plan
+
+    assert iwr_capture_plan.commands(CONFIGURATION, "default") == CONFIGURATION
+    assert "phaseCaptureCfg 20 53 9 32 53 7 47 53 47 8 1" in ActiveCollector.LIFECYCLE_COMMANDS
+    for name in iwr_capture_plan.names()[1:]:
+        assert iwr_capture_plan.phase_line(name) not in ActiveCollector.LIFECYCLE_COMMANDS

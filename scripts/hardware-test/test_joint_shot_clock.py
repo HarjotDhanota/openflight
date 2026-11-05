@@ -10,20 +10,24 @@ import pytest
 from run_joint_clock import load_package
 
 load_package(Path(os.environ["OPENFLIGHT_CLOCK_PACKAGE"]))
-from joint_shot_clock import PROFILE, ShotCollector  # noqa: E402
+from joint_clock_active import CONFIGURATION  # noqa: E402
+from joint_shot_clock import PROFILE, TRIGGER_COMMANDS, ShotCollector  # noqa: E402
 from test_joint_clock_active import WIRE  # noqa: E402
 
 
 class ShotPort(WIRE.Port):
     def __init__(self, clock, chunk):
         super().__init__(clock, chunk=chunk)
+        self.allowed = ShotCollector.LIFECYCLE_COMMANDS
+        self.double = ShotCollector.DOUBLE_COMPLETION_COMMANDS
+        self.ball_bin = 51
         self.active = self.enabled = False
         self.generation, self.shot = 0, 1
         struct.pack_into("<I", self.result, 4, self.shot)
 
     def write(self, data):
         command = data.decode().strip()
-        if command in ShotCollector.LIFECYCLE_COMMANDS or command == "stats":
+        if command in self.allowed or command == "stats":
             assert not self.pending
             self.writes.append(data)
             if command == "sensorStart":
@@ -37,10 +41,10 @@ class ShotPort(WIRE.Port):
                 self.pending = (
                     f"frames={101 if self.generation else 0} active={int(self.active)} rf_faults=0 hwa_missed=0\n"
                     f"trig phase=ARMED enabled={int(self.enabled)} latched={int(self.held)}\n"
-                    "ball state=locked follow=1 bin=51\nDone\nl3dump:/>"
+                    f"ball state=locked follow=1 bin={self.ball_bin}\nDone\nl3dump:/>"
                 ).encode()
             else:
-                count = 2 if command in ShotCollector.DOUBLE_COMPLETION_COMMANDS else 1
+                count = 2 if command in self.double else 1
                 self.pending = b"Done\n" * count + WIRE.PROMPT
             return len(data)
         count = super().write(data)
@@ -59,7 +63,7 @@ class ShotPort(WIRE.Port):
         return count
 
 
-def wire(chunk=65536):
+def wire(chunk=65536, **plan):
     clock = WIRE.Clock()
     port = ShotPort(clock, chunk)
     tokens = iter(f"{value:016x}" for value in range(1, 1000))
@@ -70,7 +74,10 @@ def wire(chunk=65536):
         now=clock,
         nonce=lambda: next(tokens),
         sleep=lambda delay: setattr(clock, "ns", clock.ns + round(delay * 1e9)),
+        **plan,
     )
+    port.allowed = collector.LIFECYCLE_COMMANDS
+    port.double = collector.DOUBLE_COMPLETION_COMMANDS
     collector.establish_fresh_runtime()
     return collector, port
 
@@ -222,3 +229,78 @@ def test_rejected_result_does_not_advance_expected_shot():
     with pytest.raises(ValueError):
         c.wait_result(lambda *_: None, lambda: False)
     assert c.next_shot == 1
+
+
+DEFAULT_PHASE = "phaseCaptureCfg 20 53 9 32 53 7 47 53 47 8 1"
+CLUB51_PHASE = "phaseCaptureCfg 16 32 17 32 53 7 47 53 47 8 1"
+
+
+def test_default_plan_is_todays_profile_byte_for_byte():
+    assert PROFILE == tuple(
+        "frameCfg 0 2 12 20000 3 1 0" if row.startswith("frameCfg ") else row
+        for row in CONFIGURATION
+    )
+    assert DEFAULT_PHASE in PROFILE and DEFAULT_PHASE in CONFIGURATION
+    assert TRIGGER_COMMANDS == tuple(f"triggerCfg {index} 1 1" for index in range(20, 73))
+    collector, _port = wire()
+    assert collector.profile == PROFILE
+    assert collector.LIFECYCLE_COMMANDS == ShotCollector.LIFECYCLE_COMMANDS
+    assert collector.DOUBLE_COMPLETION_COMMANDS == ShotCollector.DOUBLE_COMPLETION_COMMANDS
+    assert collector.capture_plan["name"] == "default"
+    assert collector.capture_plan["commands"] == list(PROFILE)
+
+
+def test_club51_sends_only_its_pre_phase_and_accepts_only_its_own_lines():
+    collector, port = wire(capture_plan="club51")
+    assert collector.profile == tuple(
+        CLUB51_PHASE if row == DEFAULT_PHASE else row for row in PROFILE
+    )
+    assert CLUB51_PHASE in collector.LIFECYCLE_COMMANDS
+    assert DEFAULT_PHASE not in collector.LIFECYCLE_COMMANDS
+    assert {row for row in collector.LIFECYCLE_COMMANDS if row.startswith("triggerCfg ")} == {
+        "triggerCfg 32 1 0",
+        *(f"triggerCfg {index} 1 1" for index in range(16, 48)),
+    }
+    with pytest.raises(ValueError, match="outside bounded RF clock scope"):
+        collector.command(DEFAULT_PHASE)
+    assert not collector.failed
+    collector.begin()
+    sent = [line.decode().strip() for line in port.writes]
+    assert CLUB51_PHASE in sent and DEFAULT_PHASE not in sent
+    assert collector.capture_plan["name"] == "club51"
+    assert collector.capture_plan["commands"] == list(collector.profile)
+    collector.finish()
+
+
+def test_default_collector_refuses_the_club51_line():
+    collector, _port = wire()
+    with pytest.raises(ValueError, match="outside bounded RF clock scope"):
+        collector.command(CLUB51_PHASE)
+
+
+def test_club51_shot_completes_on_the_real_parser_with_a_near_address_bin():
+    collector, port = wire(capture_plan="club51")
+    port.ball_bin = 30
+    collector.begin()
+    index, _ = collector.wait_ball(lambda *_: None, lambda: False)
+    collector.arm(index)
+    assert b"triggerCfg 30 1 1\n" in port.writes
+    port.active, port.held = False, True
+    held = collector.wait_result(lambda *_: None, lambda: False)
+    assert held["record"]["shot_id"] == 1
+    collector.finish()
+    assert collector.state["stop_verified"]
+
+
+@pytest.mark.parametrize("index", [15, 48, 51])
+def test_club51_refuses_a_ball_outside_its_retained_pre_window(index):
+    collector, port = wire(capture_plan="club51")
+    port.ball_bin = index
+    collector.begin()
+    with pytest.raises(ValueError, match="outside retained profile"):
+        collector.wait_ball(lambda *_: None, lambda: False)
+
+
+def test_unknown_capture_plan_opens_nothing():
+    with pytest.raises(ValueError, match="unknown IWR capture plan"):
+        wire(capture_plan="club64")

@@ -10,6 +10,7 @@ import time
 import uuid
 import zipfile
 from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
 
@@ -19,6 +20,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
 from run_joint_clock import load_package  # noqa: E402
+
+from openflight.camera import iwr_capture_plan  # noqa: E402
 
 RESTORE_INSTRUCTIONS = (
     "S1.1 OFF, S1.2 OFF, S1.3 ON; leave S1.4/S1.5 unchanged, then reconnect only IWR USB."
@@ -189,6 +192,7 @@ def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None
         "ops_trigger_source": "iwr_request" if iwr_master else "native_speed",
         "sound_gpio_used": False,
         "iwr_forced_capture": False,
+        "iwr_capture_plan": deepcopy(collector.capture_plan),
     }
 
     def trigger_observed(event):
@@ -340,7 +344,7 @@ def resource_ownership():
 
 
 @contextmanager
-def open_runtime(package, files):
+def open_runtime(package, files, *, capture_plan=iwr_capture_plan.DEFAULT):
     """One RAM boot and UART lease shared by standalone and normal fusion sessions."""
     from joint_shot_clock import ShotCollector
 
@@ -382,7 +386,10 @@ def open_runtime(package, files):
                     build=helper.verify_package()["source_fingerprint"],
                     host_boot=helper.boot_identity(),
                     sleep=time.sleep,
+                    capture_plan=capture_plan,
                 )
+                # the session header names the plan and every profile line it sends
+                files.publish("loading", iwr_capture_plan=deepcopy(collector.capture_plan))
                 collector.establish_fresh_runtime()
                 yield collector
     except BaseException as error:
@@ -402,11 +409,11 @@ def open_runtime(package, files):
         )
 
 
-def run(package, output):
+def run(package, output, *, capture_plan=iwr_capture_plan.DEFAULT):
     """The UI supplies real switch/RESET confirmations; upload is RAM-only."""
     files = SessionFiles(output)
     try:
-        with open_runtime(package, files) as collector:
+        with open_runtime(package, files, capture_plan=capture_plan) as collector:
             for index in range(1, 101):
                 files.publish(
                     "next",
@@ -425,12 +432,23 @@ def main():
     parser.add_argument("--clock-package", required=True, type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument(
+        "--iwr-capture-plan",
+        choices=iwr_capture_plan.names(),
+        default=iwr_capture_plan.DEFAULT,
+        help="IWR phaseCaptureCfg plan for the shot session (only the pre phase differs)",
+    )
     args = parser.parse_args()
     load_package(args.clock_package, shot_dumps=True)
     if not args.execute:
         print(
             json.dumps(
-                {"preflight": "passed", "devices_opened": False, "physical_timing_qualified": False}
+                {
+                    "preflight": "passed",
+                    "devices_opened": False,
+                    "physical_timing_qualified": False,
+                    "iwr_capture_plan": args.iwr_capture_plan,
+                }
             )
         )
         return
@@ -441,7 +459,7 @@ def main():
         raise InterruptedError("tester stopped session")
 
     signal.signal(signal.SIGTERM, stop)
-    run(args.clock_package.resolve(), args.output)
+    run(args.clock_package.resolve(), args.output, capture_plan=args.iwr_capture_plan)
 
 
 if __name__ == "__main__":

@@ -14,6 +14,8 @@ from joint_clock_active import (
 )
 from usb_collector import ExchangeError
 
+from openflight.camera import iwr_capture_plan
+
 # The reviewed image queues this line the moment it latches (l3_dump.c "Triggered").
 NOTICE = b"Triggered\n"
 NOTICE_COMPLETION_NS = 50_000_000
@@ -21,29 +23,46 @@ NOTICE_COMPLETION_NS = 50_000_000
 PROFILE = tuple(
     "frameCfg 0 2 12 20000 3 1 0" if row.startswith("frameCfg ") else row for row in CONFIGURATION
 )
-TRIGGER_COMMANDS = tuple(f"triggerCfg {index} 1 1" for index in range(20, 73))
+
+
+def shot_profile(plan=iwr_capture_plan.DEFAULT):
+    """The shot profile with the named plan's phaseCaptureCfg; the default is PROFILE."""
+    return iwr_capture_plan.commands(PROFILE, plan)
+
+
+def trigger_commands(plan=iwr_capture_plan.DEFAULT):
+    """A ball can lock and arm only in the bins the plan's pre phase retains."""
+    return tuple(f"triggerCfg {index} 1 1" for index in iwr_capture_plan.pre_bins(plan))
+
+
+def lifecycle_commands(plan=iwr_capture_plan.DEFAULT):
+    """Every line the collector may send under the plan, and those completing twice."""
+    triggers = trigger_commands(plan)
+    double = ("debugCfg 0", "ball cfg 1 1", "triggerCfg 32 1 0", *triggers)
+    return (*shot_profile(plan), *double, "sensorStart", "sensorStop"), double
+
+
+TRIGGER_COMMANDS = trigger_commands()
 
 
 class ShotCollector(ActiveCollector):
-    """Fixed profile, observed ball lock, independent expected result identities."""
+    """Fixed profile, observed ball lock, independent expected result identities.
 
-    LIFECYCLE_COMMANDS = (
-        *PROFILE,
-        "debugCfg 0",
-        "ball cfg 1 1",
-        "triggerCfg 32 1 0",
-        *TRIGGER_COMMANDS,
-        "sensorStart",
-        "sensorStop",
-    )
-    DOUBLE_COMPLETION_COMMANDS = (
-        "debugCfg 0",
-        "ball cfg 1 1",
-        "triggerCfg 32 1 0",
-        *TRIGGER_COMMANDS,
-    )
+    The class attributes are the default plan's; an instance accepts exactly the
+    lines of the plan it was built with.
+    """
 
-    def __init__(self, *args, **kwargs):
+    LIFECYCLE_COMMANDS, DOUBLE_COMPLETION_COMMANDS = lifecycle_commands()
+    profile = PROFILE
+    trigger_bins = iwr_capture_plan.pre_bins(iwr_capture_plan.DEFAULT)
+    capture_plan = iwr_capture_plan.record(iwr_capture_plan.DEFAULT, PROFILE)
+
+    def __init__(self, *args, capture_plan=iwr_capture_plan.DEFAULT, **kwargs):
+        profile = shot_profile(capture_plan)
+        self.LIFECYCLE_COMMANDS, self.DOUBLE_COMPLETION_COMMANDS = lifecycle_commands(capture_plan)
+        self.profile = profile
+        self.trigger_bins = iwr_capture_plan.pre_bins(capture_plan)
+        self.capture_plan = iwr_capture_plan.record(capture_plan, profile)
         super().__init__(*args, **kwargs)
         self.generation = 0
         self.next_shot = 1
@@ -84,7 +103,7 @@ class ShotCollector(ActiveCollector):
             raise ValueError("fresh identified runtime required")
         if self.generation and not self.state["stop_verified"]:
             raise ValueError("previous attempt has not stopped")
-        for command in PROFILE:
+        for command in self.profile:
             self.command(command)
         self.state.update(stop_verified=False, stop_acknowledged=False, rf_start_attempted=True)
         self.command("sensorStart")
@@ -109,7 +128,7 @@ class ShotCollector(ActiveCollector):
             publish("learning_background" if phase == "building" else "place_ball", state)
             if phase == "locked":
                 index = int(state["ball"]["bin"])
-                if state["ball"]["follow"] != "1" or not 20 <= index < 73:
+                if state["ball"]["follow"] != "1" or index not in self.trigger_bins:
                     raise ValueError("observed ball outside retained profile")
                 self.observed_ball = (self.generation, index, state)
                 return index, state

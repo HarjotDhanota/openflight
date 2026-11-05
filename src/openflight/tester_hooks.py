@@ -902,6 +902,7 @@ def _add_arguments(parser) -> None:
     parser.add_argument("--tester-native-sync-control", type=Path, default=None)
     parser.add_argument("--tester-trigger-policy", default=None)
     parser.add_argument("--tester-ops-pre-trigger-segments", type=int, default=None)
+    parser.add_argument("--tester-iwr-capture-plan", default=None)
     parser.add_argument("--tester-id")
     parser.add_argument("--tester-run-id")
     parser.add_argument("--tester-control-port", type=int, default=8765)
@@ -945,6 +946,16 @@ def _configure(args, parser) -> None:
             parser.error(str(error))
     if native_sync != (native_control is not None):
         parser.error("native fusion requires both package and control directory")
+    capture_plan = getattr(args, "tester_iwr_capture_plan", None)
+    if capture_plan is not None:
+        from openflight.camera.iwr_capture_plan import phase_line
+
+        if not native_sync:
+            parser.error("--tester-iwr-capture-plan applies only to native fusion")
+        try:
+            phase_line(capture_plan)
+        except ValueError as error:
+            parser.error(str(error))
     if native_sync:
         if (
             not args.tester_free_play
@@ -967,6 +978,7 @@ def _configure(args, parser) -> None:
                 args.tester_native_sync_control.resolve(),
                 policy=selected_policy or "independent",
                 ops_pre_trigger_segments=args.tester_ops_pre_trigger_segments,
+                capture_plan=capture_plan or "default",
             )
         )
     global study_mode_enabled, tester_setup_required, tester_config_hash  # pylint: disable=global-statement

@@ -11,6 +11,8 @@ from pathlib import Path
 
 from flask import jsonify, request, send_file
 
+from openflight.camera import iwr_capture_plan
+
 SESSION = re.compile(r"[a-f0-9]{32}")
 COMMANDS = {"switches": "switches_set", "reset": "reset_pressed", "next": "next"}
 
@@ -18,7 +20,19 @@ COMMANDS = {"switches": "switches_set", "reset": "reset_pressed", "next": "next"
 class InternalSyncController:
     """Prepare one isolated session; operators confirm physical steps in the page."""
 
-    def __init__(self, *, root, package, jobs, source, release, job_action="internal_sync"):
+    def __init__(
+        self,
+        *,
+        root,
+        package,
+        jobs,
+        source,
+        release,
+        job_action="internal_sync",
+        capture_plan=iwr_capture_plan.DEFAULT,
+    ):
+        iwr_capture_plan.phase_line(capture_plan)  # an unknown plan never starts a session
+        self.capture_plan = capture_plan
         self.root = Path(root).expanduser().resolve()
         self.package = Path(package).expanduser().resolve() if package else None
         self.jobs, self.source, self.release = jobs, Path(source), release
@@ -89,6 +103,8 @@ class InternalSyncController:
                 "--output",
                 str(folder),
                 "--execute",
+                "--iwr-capture-plan",
+                self.capture_plan,
             ]
             self.session = session
             latest = self.root / "latest-session.tmp"

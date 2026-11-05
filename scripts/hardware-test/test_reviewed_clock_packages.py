@@ -96,6 +96,7 @@ def test_native_runtime_collector_uses_the_selected_firmware_identity(tmp_path, 
 
         def __init__(self, _handle, **kwargs):
             observed.append(kwargs["build"])
+            self.capture_plan = {"name": kwargs["capture_plan"]}
 
         def establish_fresh_runtime(self):
             pass
