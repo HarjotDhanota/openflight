@@ -2,8 +2,9 @@
 
 The ball's post-impact range walk is searched at the OPS243 ball speed and its line is read
 back at the contact time (``back_extrapolation``): a contact time on the IWR ring clock from
-outside the IWR (measured), else the club walk reaching the tee bin, else the walk's
-earliest consistent start (both estimated). The club and ball walks are never intersected:
+outside the IWR (measured), else the club walk reaching the tee bin (estimated). Without
+either the walk is evidence only: never read back to its own start, whose first frames
+carry the club's approach. The club and ball walks are never intersected:
 they are nearly parallel (29-31 vs 36.5 m/s on Oct 27 shot 1, 1 bin = 6 ms). The camera
 prior sizes the search and checks the answer; values are measured, estimated or not_measured."""
 
@@ -41,7 +42,10 @@ CLUB_CONTAMINATION_M = 0.11
 METHOD = "back_extrapolation"
 CONTACT_SUPPLIED = "contact_time_supplied"
 CONTACT_CLUB_AT_TEE = "club_walk_at_tee"
-CONTACT_WALK_START = "walk_start"
+NO_CONTACT_REASON = (
+    "ball walk found (rate {speed:.1f} m/s, frames {first}-{last}) but no contact time to "
+    "read it back to ({why})"
+)
 NO_RING_CONTACT = "no camera contact time on the IWR ring clock"
 # At contact the club's face touches the ball's back, one ball radius nearer the radar
 # (behind the ball) than the resting ball's centre the prior locates: the club walk is
@@ -668,41 +672,22 @@ def _crossing_s(walk: tracking.BallTrack, range_m: float, res_m: float) -> float
     return (float(range_m) / res_m - walk.intercept_bins) / walk.slope_bins
 
 
-def _walk_start_sigma_m(
-    geometry: tracking.Geometry, ball_speed_ms: float, club_speed_ms: float | None
-) -> float:
-    """A walk start's range error: half a frame either side, and the club's contamination.
-
-    The club's approach runs nearly collinear into contact: its samples stay on the ball's
-    line (within the inlier tolerance) for tolerance / (v_ball - v_club) before it, and the
-    start can land that early. With a club speed that span, at the ball's speed, is the
-    contamination when it exceeds CLUB_CONTAMINATION_M (Oct 27 shot 1: 6.4 ms, 0.23 m)."""
-    contamination = CLUB_CONTAMINATION_M
-    if club_speed_ms is not None and ball_speed_ms - club_speed_ms > 0.0:
-        tolerance = _TRACK_TOLERANCE_BINS if geometry.n_samples >= 128 else 0.8
-        merge_s = tolerance * geometry.range_res_m / (ball_speed_ms - club_speed_ms)
-        contamination = max(contamination, ball_speed_ms * merge_s)
-    return math.hypot(ball_speed_ms * geometry.frame_period_s / 2.0, contamination)
-
-
-def _contact_time(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+def _contact_time(
     prepared: PreparedShotDump,
-    ball: tracking.BallTrack,
-    start_s: float,
     club: tracking.BallTrack | None,
     prior: LaunchRangePrior | None,
     range_bias_m: float,
     contact: ContactTime | None,
-) -> dict:
-    """When the ball walk is read back to: (t, sigma, source, label, reason).
+) -> dict | str:
+    """When the ball walk is read back to (t, sigma, source, label, reason), or why there is
+    no such time.
 
-    A supplied contact time on the IWR clock is measured. Without one there are two IWR
-    estimates, both labelled estimated with the reason: the club walk's line reaching the
-    tee bin (the prior's apparent range less a ball radius, where the face meets the ball;
-    inside the club walk's own samples), its sigma the club line's error there and the
-    prior's sigma over the club speed; and the walk's earliest consistent start, half a
-    frame either side plus the club's contamination. The one whose launch-point sigma is
-    smaller is used (a loose prior's sigma, over the club speed, outweighs the start's)."""
+    A supplied contact time on the IWR clock is measured. Without one, the club walk's line
+    reaching the tee bin (the prior's apparent range less a ball radius, where the face
+    meets the ball; inside the club walk's own samples), its sigma the club line's error
+    there and the prior's sigma over the club speed: estimated, with the reason. The walk's
+    own start is no contact time: its first frames carry the club's collinear approach
+    (Oct 27 shots 2-4, Sep 29/30: 0.5-0.9 m short)."""
     geometry = prepared.geometry
     res = geometry.range_res_m
     if contact is not None:
@@ -714,45 +699,22 @@ def _contact_time(  # pylint: disable=too-many-arguments,too-many-positional-arg
             "label": "measured",
             "reason": None,
         }
-    start = {
-        "t_s": float(start_s),
-        "sigma_s": float(geometry.frame_period_s / 2.0),
-        "source": CONTACT_WALK_START,
-        "label": "estimated",
-    }
-
-    def from_start(why: str) -> dict:
-        return {
-            **start,
-            "reason": (
-                f"contact time from the walk's earliest consistent start at "
-                f"{1000.0 * start_s:.1f} ms ({why}); {NO_RING_CONTACT}"
-            ),
-        }
-
     if club is None or club.slope_bins <= 0.0:
-        return from_start("no club walk")
+        return "no camera contact time on the IWR ring clock and no club walk"
     if prior is None:
-        return from_start("no tee bin to read the club walk at")
+        return "no camera contact time on the IWR ring clock and no tee bin to read the club at"
     tee_apparent_m = prior.range_m + float(range_bias_m)
     t_club = _crossing_s(club, tee_apparent_m - CLUB_FACE_AT_CONTACT_M, res)
     frame = geometry.frame_period_s
     if not club.t_first - frame <= t_club <= club.t_last + frame:
-        return from_start(
-            f"the club walk ({1000.0 * club.t_first:.0f}-{1000.0 * club.t_last:.0f} ms) does not "
-            f"reach the tee bin inside its samples ({1000.0 * t_club:.0f} ms)"
+        return (
+            f"no camera contact time on the IWR ring clock and the club walk "
+            f"({1000.0 * club.t_first:.0f}-{1000.0 * club.t_last:.0f} ms) does not reach the "
+            f"tee bin inside its samples ({1000.0 * t_club:.0f} ms)"
         )
     sigma_s = math.hypot(
         _line_sigma_m(club, t_club, res) / club.speed_ms, prior.uncertainty_m / club.speed_ms
     )
-    club_sigma_m = ball.speed_ms * sigma_s
-    start_sigma_m = _walk_start_sigma_m(geometry, ball.speed_ms, club.speed_ms)
-    if club_sigma_m > start_sigma_m:
-        return from_start(
-            f"the club walk's arrival at the tee bin ({1000.0 * t_club:.1f} ms) rests on a "
-            f"prior of sigma {prior.uncertainty_m:.2f} m: {club_sigma_m:.2f} m against the "
-            f"start's {start_sigma_m:.2f} m"
-        )
     return {
         "t_s": float(t_club),
         "sigma_s": float(sigma_s),
@@ -804,15 +766,20 @@ def _launch_point(  # pylint: disable=too-many-arguments,too-many-locals
             prepared, scope, ball, around_s, gate[0], float(club_speed_mph) / tracking.MPH_PER_MS
         )
         club_source = "approach_walk"
-    timing = _contact_time(prepared, ball, start_s, club, prior, range_bias_m, contact)
+    walk_facts = {
+        **_track_facts(ball, res),
+        **_walk_record(prepared, scope, gate, ball),
+        "walk_start_s": start_s,
+    }
+    timing = _contact_time(prepared, club, prior, range_bias_m, contact)
+    if isinstance(timing, str):
+        frames = walk_facts["frames"] or [None, None]
+        return NO_CONTACT_REASON.format(
+            speed=ball.speed_ms, first=frames[0], last=frames[1], why=timing
+        )
     impact_t_s = timing["t_s"]
     apparent = float(ball.range_at(impact_t_s, res))
-    if timing["source"] == CONTACT_WALK_START:
-        club_ms = club.speed_ms if club is not None else None
-        terms = [_walk_start_sigma_m(geometry, ball.speed_ms, club_ms)]
-    else:
-        terms = [ball.speed_ms * timing["sigma_s"]]
-    terms += [_line_sigma_m(ball, impact_t_s, res), MODEL_FLOOR_M]
+    terms = [ball.speed_ms * timing["sigma_s"], _line_sigma_m(ball, impact_t_s, res), MODEL_FLOOR_M]
     club_facts = _track_facts(club, res)
     if club_facts is not None:
         club_facts = {
@@ -826,11 +793,7 @@ def _launch_point(  # pylint: disable=too-many-arguments,too-many-locals
         "apparent_m": apparent,
         "uncertainty_m": float(math.hypot(*terms)),
         "contact": timing,
-        "ball_track": {
-            **_track_facts(ball, res),
-            **_walk_record(prepared, scope, gate, ball),
-            "walk_start_s": start_s,
-        },
+        "ball_track": walk_facts,
         "club_track": club_facts,
         "ball_walk": ball,
         "club_walk": club,
@@ -1087,7 +1050,11 @@ def estimate_launch_range(  # pylint: disable=too-many-arguments,too-many-locals
         return LaunchRangeEstimate(
             status="not_measured", reason="no ball track after impact", **common
         )
-    common.update(scope=scope, ball_track=_track_facts(ball, res), track=ball)
+    common.update(
+        scope=scope,
+        ball_track={**_track_facts(ball, res), **_walk_record(prepared, scope, gate, ball)},
+        track=ball,
+    )
     point = _launch_point(
         prepared,
         scope,

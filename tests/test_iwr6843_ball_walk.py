@@ -310,3 +310,36 @@ def test_the_anchor_reads_the_club_where_its_face_meets_the_ball():
 
     assert anchor["t_club_s"] - anchor["t_ball_s"] == pytest.approx(0.0025, abs=1e-6)
     assert anchor["status"] == "agrees"
+
+
+def test_a_walk_with_only_its_start_to_time_it_is_evidence_not_a_launch_point(inputs, vertical):
+    """No camera contact time and no club walk (no OPS club speed): the walk's own start is
+    no contact time (its first frames carry the club's approach), so nothing is measured;
+    the walk stays in the record, and the shot's ball range is the located tee's, exactly as
+    at 4e7a9077 (1.814 +- 0.03 m, camera_resting_ball, estimated)."""
+    prior = lr.LaunchRangePrior(1.814, 0.03, lr.LOCATED_TEE_SOURCE)
+    estimate = lr.estimate_launch_range(
+        vertical,
+        ball_speed_mph=inputs["ball_speed_mph"],
+        club_speed_mph=None,
+        prior=prior,
+        net_range_m=inputs["net_range_m"],
+        range_bias_m=inputs["range_bias_m"],
+    )
+
+    assert estimate.status == "not_measured"
+    assert estimate.range_m is None and estimate.candidate_range_m is None
+    assert estimate.reason.startswith("ball walk found (rate 3")
+    assert "but no contact time to read it back to" in estimate.reason
+    walk = estimate.to_dict()["ball_track"]
+    assert walk["n_frames"] >= 10 and walk["snr_db_median"] is not None
+    chosen = lr.shot_ball_range(estimate, prior)
+    assert (chosen.range_m, chosen.uncertainty_m, chosen.source, chosen.label) == (
+        1.814,
+        0.03,
+        lr.LOCATED_TEE_SOURCE,
+        "estimated",
+    )
+    # without a camera prior either, nothing stands in: no walk-start range reaches the shot
+    alone = lr.shot_ball_range(estimate, None)
+    assert alone.source is None and alone.label == "not_measured"

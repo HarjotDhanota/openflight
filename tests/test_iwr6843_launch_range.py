@@ -136,13 +136,14 @@ def test_the_ball_walk_read_back_at_the_club_s_arrival_at_the_tee_is_the_launch_
     assert record["prior"] == {"range_m": 2.1, "uncertainty_m": 0.08, "source": "camera_size"}
 
 
-def test_a_loose_prior_reads_the_walk_back_to_its_start_instead():
-    """A 0.30 m prior over the 32 m/s club is 9 ms of contact time, 0.42 m of launch
-    point: more than the walk start's ~0.2 m, so the start is used, with the reason."""
+def test_a_loose_prior_times_the_club_and_its_sigma_carries_the_prior():
+    """A 0.30 m prior over the 32 m/s club is 9 ms of contact time, ~0.42 m of launch
+    point at 45 m/s: the club's arrival at the tee bin is still the contact time (never
+    the walk's own start), and the sigma says how little it is worth."""
     estimate = _estimate()
 
-    assert estimate.contact["source"] == "walk_start"
-    assert "rests on a prior of sigma 0.30 m" in estimate.contact["reason"]
+    assert estimate.contact["source"] == "club_walk_at_tee"
+    assert estimate.uncertainty_m >= 0.9 * 0.30 * 45.0 / 32.0
     assert abs(estimate.range_m - 2.10) <= 2.0 * estimate.uncertainty_m
 
 
@@ -179,18 +180,18 @@ def test_a_contact_time_must_be_finite_and_named():
         lr.ContactTime(t_s=0.03, sigma_s=0.001, source="")
 
 
-def test_without_a_club_track_the_ball_walk_s_start_is_the_launch_point():
+def test_without_a_club_track_the_walk_is_evidence_not_a_launch_point():
+    """The walk's own start is no contact time: not measured, the walk kept, the reason."""
     estimate = _estimate(_capture(club=False), club_speed_mph=None)
 
-    assert estimate.status == "measured", estimate.reason
-    assert estimate.method == "back_extrapolation"
-    assert estimate.contact["source"] == "walk_start"
-    assert estimate.range_m == pytest.approx(2.10, abs=0.10)
-    assert estimate.uncertainty_m >= 45.0 * FRAME_PERIOD_S / 2.0
-    # no club walk anchors its contact time (and none from sound in IWR time): estimated
-    assert estimate.anchor["status"] == "unanchored"
-    assert estimate.label == "estimated"
-    assert "no club walk" in lr.shot_ball_range(estimate, None).reason
+    assert estimate.status == "not_measured"
+    assert estimate.range_m is None and estimate.candidate_range_m is None
+    assert estimate.reason.startswith("ball walk found (rate 4")
+    assert estimate.reason.endswith("no club walk)")
+    assert estimate.ball_track["speed_ms"] == pytest.approx(45.0, abs=1.5)
+    assert estimate.label == "not_measured"
+    chosen = lr.shot_ball_range(estimate, None)
+    assert chosen.label == "not_measured" and "no club walk" in chosen.reason
 
 
 def test_the_radar_s_range_bias_is_removed():
@@ -217,12 +218,14 @@ def test_without_the_ops_ball_speed_nothing_is_measured():
     assert "OPS243 ball speed" in estimate.reason
 
 
-def test_a_launch_point_far_from_the_camera_prior_is_refused_and_kept_for_review():
+def test_a_prior_far_from_the_walks_gives_no_contact_time_and_no_launch_point():
+    """No club walk is found near a 1.20 m tee bin (the club is seen from 1.72 m): no
+    contact time, nothing read back, nothing measured."""
     estimate = _estimate(prior=_prior(range_m=1.20, uncertainty_m=0.05))
 
     assert estimate.status == "not_measured"
-    assert "disagrees with the camera prior" in estimate.reason
-    assert estimate.candidate_range_m == pytest.approx(2.10, abs=0.25)
+    assert "but no contact time to read it back to" in estimate.reason
+    assert estimate.candidate_range_m is None
     assert estimate.range_m is None
 
 

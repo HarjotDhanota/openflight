@@ -28,7 +28,9 @@ def _session(tmp_path: Path, name: str, launches: list[float | None]) -> Path:
     """A kiosk run folder: its session log and one IWR dump per shot."""
     run = tmp_path / name / "arm5" / "paired" / "run-01"
     (run / "iwr6843").mkdir(parents=True)
-    lines = [{"type": "session_start", "iwr6843": {"range_prior": None}}]
+    # a camera prior the club walk can be timed at (without one no contact time exists)
+    prior = {"range_m": 2.10, "uncertainty_m": 0.08, "source": "camera_size"}
+    lines = [{"type": "session_start", "iwr6843": {"range_prior": prior}}]
     for number, launch in enumerate(launches, start=1):
         dump = run / "iwr6843" / f"iwr6843_{number:03d}.l3dump"
         if launch is not None:
@@ -79,8 +81,8 @@ def test_each_shot_is_graded_against_the_tape(tmp_path):
     shots = report["sessions"][0]["shots"]
     assert len(shots) == 2
     assert all(shot["status"] == "measured" for shot in shots)
-    # no camera prior, no contact time on the IWR clock: each walk is read back to its own
-    # start (G4 C2; the club-ball intersection is no launch point), within its own sigma
+    # no contact time on the IWR clock: each walk is read back to the club's arrival at the
+    # prior's tee bin (G4 C2; never the club-ball intersection), within its own sigma
     assert all(abs(shot["error_m"]) <= 2.0 * shot["uncertainty_m"] for shot in shots)
     assert all(shot["method"] == "back_extrapolation" for shot in shots)
     assert report["sessions"][0]["tape_m"] == 2.10

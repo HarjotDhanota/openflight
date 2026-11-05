@@ -76,15 +76,17 @@ def test_a_late_run_leaves_shot_14_s_range_and_a_labelled_launch(shot):
 
     assert recovery.frames_dropped == (22,)
     assert result["partial_recovery"]["label"] == PARTIAL_LABEL
-    # no club walk anchors shot 14's contact: estimated outranks the partial label (C6a')
-    assert result["range_label"] == "estimated"
-    assert result["range_m"] == pytest.approx(1.908, abs=0.05)
-    assert result["launch_deg"] is not None
-    assert result["launch_status"].endswith(PARTIAL_LABEL)
+    # no camera prior, so no contact time (G4): the walk is evidence, no launch point, and
+    # the angle stage has no tee range (at 4e7a9077: 1.908 m estimated, a partial launch)
+    assert result["range_status"] == "not_measured"
+    assert result["range_m"] is None
+    assert result["launch_status"] == "tee_range_unresolved"
     # the same frames cut from the whole dump give the same answer: nothing was guessed
-    assert sim.run_runtime(select_frames(raw, recovery.frames_kept), shot_context)[
-        "launch_deg"
-    ] == pytest.approx(result["launch_deg"])
+    whole = sim.run_runtime(select_frames(raw, recovery.frames_kept), shot_context)
+    assert (whole["range_status"], whole["launch_status"]) == (
+        result["range_status"],
+        result["launch_status"],
+    )
 
 
 def test_the_recovery_script_reports_and_writes_a_partial_named_file(shot, tmp_path, capsys):

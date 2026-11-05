@@ -76,6 +76,11 @@ def _two_walks(launches_m=(1.60, 2.60), impact_s=0.020, seed=4):
     return PreparedShotDump(metadata={}, cube=cube, geometry=geo, range_domain=True)
 
 
+# The walks are read back at a contact time on the IWR clock from outside the IWR (G4: a
+# walk's own start is no contact time, and these captures have no club walk).
+CONTACT = lr.ContactTime(t_s=0.020, sigma_s=0.0005, source="test_contact_on_iwr_clock")
+
+
 def _estimate(prepared, prior=None):
     return lr.estimate_launch_range(
         prepared,
@@ -83,6 +88,7 @@ def _estimate(prepared, prior=None):
         club_speed_mph=None,
         prior=prior,
         net_range_m=4.6,
+        contact_time=CONTACT,
     )
 
 
@@ -149,10 +155,10 @@ def test_a_tight_camera_prior_keeps_the_far_walk_out_of_the_search():
     assert estimate.status == "measured", estimate.reason
     assert estimate.range_m == pytest.approx(2.60, abs=0.12)
     assert estimate.competing is None
-    # no club walk anchors the contact (club speed unknown): estimated, not ambiguous
+    # one walk, read back at the supplied contact time, which the anchor holds it to
     assert not estimate.ambiguous
-    assert estimate.anchor["status"] == "unanchored"
-    assert estimate.label == "estimated"
+    assert estimate.anchor["status"] == "agrees"
+    assert estimate.label == "measured"
 
 
 def test_competing_walks_that_launch_from_the_same_place_are_one_answer():
@@ -161,8 +167,8 @@ def test_competing_walks_that_launch_from_the_same_place_are_one_answer():
     assert estimate.status == "measured", estimate.reason
     assert not estimate.ambiguous
     assert estimate.competing is None or estimate.competing["verdict"] == "agree"
-    # unanchored (no club walk), so estimated rather than measured
-    assert estimate.label == "estimated"
+    # one answer, read back at the supplied contact time: measured
+    assert estimate.label == "measured"
 
 
 def test_a_partial_dump_s_ambiguous_range_is_still_estimated():
