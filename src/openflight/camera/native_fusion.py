@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import hashlib
 import importlib
 import json
 import signal
@@ -23,11 +24,31 @@ from openflight.ops_sync import analyze_recording
 from openflight.rolling_buffer.trigger import HardwareTriggeredCapture
 
 
+def _verify_iwr_evidence(folder, result, held):
+    notice = result.get("iwr_trigger_observation", {})
+    for name in ("shot_id", "generation"):
+        value = held["record"].get(name)
+        if (
+            value is None
+            or result.get(f"iwr_{name}") != value
+            or notice.get(f"expected_{name}") != value
+        ):
+            raise ValueError(f"IWR {name} differs between this attempt, notice and held result")
+    try:
+        raw = (folder / "iwr-dump.bin").read_bytes()
+    except OSError as error:
+        raise ValueError("IWR raw dump is unavailable; originals retained") from error
+    saved = result.get("iwr_raw", {})
+    if len(raw) != saved.get("bytes") or hashlib.sha256(raw).hexdigest() != saved.get("sha256"):
+        raise ValueError("IWR raw dump differs from this attempt's retained size or digest")
+
+
 def bind_attempt(folder, result):
     """Check identity and actual clip coverage before offering a fusion candidate."""
     if result["status"] != "captured_unqualified":
         raise ValueError("native attempt is incomplete; originals retained")
     held = json.loads((folder / "iwr-held.json").read_text())
+    _verify_iwr_evidence(folder, result, held)
     clip = result["camera"]["clips"]
     if len(clip) != 1:
         raise ValueError("one camera event required")

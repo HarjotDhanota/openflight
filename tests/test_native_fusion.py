@@ -1,5 +1,6 @@
 """Native acquisition stays inside the ordinary fusion and publication boundaries."""
 
+import hashlib
 import json
 from dataclasses import asdict
 from pathlib import Path
@@ -68,8 +69,14 @@ def bundle(tmp_path):
     edges = recording(((100, "rising"), (120, "falling")))
     edges[0].update(boot_id="boot", mono_ns=90)
     (radar / "gpio.jsonl").write_text("".join(json.dumps(row) + "\n" for row in edges))
+    raw = b"original IWR bytes"
+    (folder / "iwr-dump.bin").write_bytes(raw)
     result = {
         "status": "captured_unqualified",
+        "iwr_shot_id": 1,
+        "iwr_generation": 1,
+        "iwr_trigger_observation": {"expected_shot_id": 1, "expected_generation": 1},
+        "iwr_raw": {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()},
         "camera_root": str(root),
         "camera": {"clips": [{"metadata": "camera/capture-001/metadata.json"}]},
     }
@@ -112,6 +119,42 @@ def test_one_owned_event_with_actual_clip_coverage_is_only_a_candidate(tmp_path)
     assert association["physical_timing_qualified"] is False
     assert association["impact_mono_interval_ns"] is None
     assert association["status"] == "experimental_software_candidate"
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "shot_id",
+        "generation",
+        "notice_shot_id",
+        "notice_generation",
+        "changed_raw",
+        "truncated_raw",
+        "missing_raw",
+        "wrong_size",
+        "missing_digest",
+    ],
+)
+def test_mismatched_iwr_evidence_cannot_enter_fusion(tmp_path, fault):
+    folder, result, _camera = bundle(tmp_path)
+    if fault in ("shot_id", "generation"):
+        result[f"iwr_{fault}"] += 1
+    elif fault.startswith("notice_"):
+        result["iwr_trigger_observation"][f"expected_{fault.removeprefix('notice_')}"] += 1
+    elif fault in ("changed_raw", "truncated_raw", "missing_raw"):
+        path = folder / "iwr-dump.bin"
+        raw = path.read_bytes()
+        if fault == "missing_raw":
+            path.unlink()
+        else:
+            path.write_bytes(b"X" + raw[1:] if fault == "changed_raw" else raw[:-1])
+    elif fault == "wrong_size":
+        result["iwr_raw"]["bytes"] += 1
+    else:
+        del result["iwr_raw"]["sha256"]
+    with pytest.raises(ValueError, match="IWR"):
+        bind_attempt(folder, result)
+    assert not (folder / "fusion-association.json").exists()
 
 
 @pytest.mark.parametrize("fault", ["outside_clip", "different_event", "duplicate_pulse", "partial"])
@@ -198,8 +241,8 @@ TIMING = DumpTransferTiming(
 )
 
 
-@pytest.mark.parametrize("paired", [False, True])
-def test_native_capture_enters_existing_ops_parser_without_an_invented_epoch(tmp_path, paired):
+@pytest.mark.parametrize("fault", [None, "partial", "changed_raw", "notice_generation"])
+def test_native_capture_enters_existing_ops_parser_without_an_invented_epoch(tmp_path, fault):
     import threading
 
     from openflight.rolling_buffer.processor import RollingBufferProcessor
@@ -228,20 +271,22 @@ def test_native_capture_enters_existing_ops_parser_without_an_invented_epoch(tmp
         )
         (folder / "ops-camera/ops-response.raw").write_text(raw)
         (folder / "iwr-dump.bin").write_bytes(b"original IWR bytes")
-        result.update(
-            ops_capture_observed=True,
-            iwr_raw={"transfer_timing": asdict(TIMING)},
-        )
-        if not paired:
+        result["ops_capture_observed"] = True
+        result["iwr_raw"]["transfer_timing"] = asdict(TIMING)
+        if fault == "partial":
             result["status"] = "partial"
+        elif fault == "changed_raw":
+            (folder / "iwr-dump.bin").write_bytes(b"wrong radar evidence")
+        elif fault == "notice_generation":
+            result["iwr_trigger_observation"]["expected_generation"] += 1
         return result
 
     owner.tools = SimpleNamespace(attempt=saved_attempt)
     capture = owner.acquire(None, RollingBufferProcessor(), threading.Event(), None)
     assert capture.num_samples == 4096 and capture.trigger_timestamp is None
     assert capture.trigger_type == "hardware"
-    assert (owner.iwr_capture is not None) == paired
-    if paired:
+    assert (owner.iwr_capture is not None) == (fault is None)
+    if fault is None:
         assert owner.iwr_capture.raw == b"original IWR bytes"
         assert owner.iwr_capture.dump_duration_ns == 400
         # the same transfer marks the kiosk path logs; no GATE, so no GATE latency

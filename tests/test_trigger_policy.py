@@ -148,9 +148,9 @@ def test_free_play_offers_the_five_architectures_and_explains_each_block(tmp_pat
         assert "not timing-qualified" in reason.lower()
 
 
-@pytest.mark.parametrize("selected", ["independent", "ops_led", "hybrid"])
-@pytest.mark.parametrize("paired", [False, True])
-def test_actual_acquisition_policy_differs_without_delaying_retention(tmp_path, selected, paired):
+@pytest.mark.parametrize("selected", ["independent", "ops_led", "iwr_led", "hybrid"])
+@pytest.mark.parametrize("fault", [None, "partial", "changed_raw"])
+def test_actual_acquisition_policy_differs_without_delaying_retention(tmp_path, selected, fault):
     owner = object.__new__(NativeFusionExtension)
     owner.policy = policy.snapshot(selected)
     owner.publishing, owner.sequence = False, 0
@@ -170,22 +170,22 @@ def test_actual_acquisition_policy_differs_without_delaying_retention(tmp_path, 
         (folder / "ops-camera/ops-response.raw").write_text(
             "\n".join(json.dumps({key: value}) for key, value in raw.items())
         )
-        (folder / "iwr-dump.bin").write_bytes(b"own raw IWR")
-        result.update(
-            ops_capture_observed=True,
-            iwr_shot_id=1,
-            iwr_raw={"transfer_timing": {"cli_ready_ns": 500, "request_written_ns": 100}},
-        )
-        if not paired:
+        result["ops_capture_observed"] = True
+        result["iwr_raw"]["transfer_timing"] = {"cli_ready_ns": 500, "request_written_ns": 100}
+        if fault == "partial":
             result["status"] = "partial"
+        elif fault == "changed_raw":
+            (folder / "iwr-dump.bin").write_bytes(b"wrong IWR evidence")
         retained.append(folder)
         return result
 
     owner.tools = SimpleNamespace(attempt=acquire)
     capture = owner.acquire(None, RollingBufferProcessor(), threading.Event(), None)
     folder = retained[0]
+    paired = fault is None
     assert (folder / "ops-camera/ops-response.raw").is_file()
     assert (capture is not None) == (paired or selected != "hybrid")
+    assert (owner.iwr_capture is not None) == paired
     outcome = json.loads((folder / "policy-decision.json").read_text())
     assert outcome["confirmed"] == paired
     assert outcome["settings"]["policy"] == selected
