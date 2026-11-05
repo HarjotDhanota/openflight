@@ -52,7 +52,7 @@ def _isolated_extensions(function):
 
 
 @contextmanager
-def _server_context(config, record, context, runtime, camera, seed):
+def _server_context(config, record, context, runtime, camera, seed, calibration=None):
     from openflight import server, shot_models  # noqa: PLC0415
 
     parameters = ((config.get("rig_geometry") or {}).get("snapshot") or {}).get("parameters")
@@ -94,6 +94,7 @@ def _server_context(config, record, context, runtime, camera, seed):
         "iwr6843_runtime_config": {},
         "inclinometer_runtime_config": deepcopy(config.get("inclinometer") or {}),
         "camera_lens": None,
+        "camera_calibration_set": calibration,
     }
     for name in (
         "monitor",
@@ -103,7 +104,6 @@ def _server_context(config, record, context, runtime, camera, seed):
         "kld7_horizontal",
         "inclinometer_service",
         "ball_at_address_monitor",
-        "camera_calibration_set",
         "camera_tilt_calibration_path",
         "camera_replay_manager",
         "air_sensor_service",
@@ -156,6 +156,102 @@ def _camera(events, record, number, session_dir):
         metadata,
     )
     return capture, archive, context, None
+
+
+def _saved_calibration(config, record, capture, archive, session_uuid):
+    from openflight.camera.calibrated_projection import (  # noqa: PLC0415
+        CalibrationSet,
+        calibration_pair,
+    )
+    from openflight.camera.impact_optics import check_mode, recorded_model  # noqa: PLC0415
+
+    model = recorded_model(record, session_uuid, archive["_capture_npz_sha256"])
+    if model is None:
+        raise ValueError(
+            "saved calibrated model payload unavailable; hashes/paths are insufficient"
+        )
+    rig_record = (config.get("rig_geometry") or {}).get("snapshot") or {}
+    parameters = rig_record.get("parameters") or {}
+    if geometry_fingerprint(parameters) != rig_record.get("sha256"):
+        raise ValueError("saved calibrated pair requires an intact recorded rig")
+    rig = RigGeometry(**parameters)
+    pair = calibration_pair(
+        deepcopy(model.snapshot["artifact"]),
+        deepcopy(model.snapshot["placement"]),
+        rig_params_sha256=rig_record["sha256"],
+        iwr_offset_mm=rig.iwr_offset_mm,
+    )
+    mode = f"{pair.mode[0]}x{pair.mode[1]}"
+    camera = config.get("camera_capture") or {}
+    lens = camera.get("lens") or {}
+    if lens.get("lens_id") is not None and lens["lens_id"] != pair.lens_id:
+        raise ValueError("recorded selected lens differs from embedded calibrated pair")
+    context = record["camera_fusion_context"]
+    evidence = context["geometry"]["parameters"].get("calibrated_mode_evidence") or {}
+    declared = config.get("camera_calibrated_fusion") or {}
+    claims = [evidence.get("calibration_pair"), (declared.get("pairs") or {}).get(mode)]
+    active = declared.get("in_use") or {}
+    if active.get("mode") == mode or declared.get("active_mode") == mode:
+        claims.append(active)
+        claims.append(declared)
+    expected = pair.record()
+    for claim in claims:
+        if not isinstance(claim, dict):
+            continue
+        for key in (
+            "mode",
+            "lens_id",
+            "optical_calibration_sha256",
+            "placement_sha256",
+            "rig_geometry_params_sha256",
+        ):
+            if claim.get(key) is not None and claim[key] != expected[key]:
+                raise ValueError(f"recorded calibrated pair {key} differs from embedded inputs")
+    compatibility = check_mode(archive["frames"], capture.metadata, pair.optical)
+    return CalibrationSet(pairs=(pair,), source="recorded_snapshot"), {
+        "status": "restored",
+        "source": "capture-bound embedded optical and placement inputs",
+        "pair": expected,
+        "recorded_observed_pose_deg": deepcopy(model.snapshot["observed_pose_deg"]),
+        "capture_mode": compatibility,
+        "original_file_bytes": (
+            "not restored; payload fingerprints verified, file hashes unverified"
+        ),
+    }
+
+
+def _calibration_requested(config, record, archive):
+    camera = config.get("camera_capture") or {}
+    geometry = (record.get("camera_fusion_context") or {}).get("geometry") or {}
+    parameters = geometry.get("parameters") or {}
+    snapshot = parameters.get("calibrated_model_snapshot")
+    shape = np.shape((archive or {}).get("frames"))
+    width, height = (
+        (shape[-1], shape[-2])
+        if len(shape) == 3
+        else (
+            parameters.get("image_width_px", camera.get("width")),
+            parameters.get("image_height_px", camera.get("height")),
+        )
+    )
+    mode = f"{width}x{height}"
+    declared = config.get("camera_calibrated_fusion") or {}
+    pairs = declared.get("pairs") or {}
+    active = declared.get("in_use") or {}
+    nominal = (
+        declared.get("active_mode") == mode
+        and declared.get("principal_point") == "image_centre"
+        and not active
+        and mode not in pairs
+    )
+    return (
+        snapshot is not None
+        or record.get("calibrated_camera_status") == "experimental_unqualified"
+        or mode in pairs
+        or active.get("mode") == mode
+        or (declared.get("active_mode") == mode and declared.get("principal_point") == "calibrated")
+        or ((camera.get("lens") or {}).get("intrinsics") == "calibrated" and not nominal)
+    )
 
 
 def _fresh_ops(entry, start, number, sample_rate, club):
@@ -314,17 +410,12 @@ def replay_full_shot(
             )
         seed = {key: seed.get(key) for key in ("look", "seed", "range_prior_rejection")}
         config = deepcopy(start.get("config") or {})
+        calibrated = _calibration_requested(config, record, archive)
         lens = (config.get("camera_capture") or {}).get("lens") or {}
-        geometry_inputs = (context.get("geometry") or {}).get("parameters") or {}
-        if lens.get("intrinsics") == "calibrated" or geometry_inputs.get(
-            "calibrated_model_snapshot"
-        ):
-            errors["camera"] = (
-                "recorded calibrated camera model/pair cannot be restored by this replay"
-            )
-            capture = archive = None
-            context = {}
-            (config.get("camera_capture") or {}).pop("lens", None)
+        if not calibrated and lens.get("intrinsics") == "calibrated":
+            lens["intrinsics"] = "nominal"
+        calibration = None
+        calibration_provenance = {"status": "not_requested"}
         parameters = ((config.get("rig_geometry") or {}).get("snapshot") or {}).get("parameters")
         try:
             if parameters:
@@ -338,7 +429,38 @@ def replay_full_shot(
             capture = archive = None
             context = {}
             config.pop("rig_geometry", None)
-        with _server_context(config, record, context, runtime, None, seed) as server:
+        if calibrated and capture is not None:
+            try:
+                calibration, calibration_provenance = _saved_calibration(
+                    config, record, capture, archive, start["session_uuid"]
+                )
+            except (ValueError, KeyError, TypeError) as error:
+                errors["camera"] = f"saved calibrated camera inputs refused: {error}"
+                calibration_provenance = {"status": "refused", "reason": errors["camera"]}
+                capture = archive = None
+                context = {}
+                (config.get("camera_capture") or {}).pop("lens", None)
+        elif calibrated:
+            calibration_provenance = {"status": "refused", "reason": errors.get("camera")}
+        with _server_context(config, record, context, runtime, None, seed, calibration) as server:
+            if calibration is not None:
+                try:
+                    pair = calibration.pairs[0]
+                    pose = record.get("inclinometer") or {}
+                    server._calibrated_pose_evidence(pose, pair.placement)
+                    placed = server._fusion_calibrated_model(pair, pose)
+                    if (
+                        placed.snapshot["observed_pose_deg"]
+                        != calibration_provenance["recorded_observed_pose_deg"]
+                    ):
+                        raise ValueError(
+                            "embedded observed pose differs from own recorded inclinometer"
+                        )
+                except (ValueError, TypeError, KeyError) as error:
+                    errors["camera"] = f"saved calibrated camera pose refused: {error}"
+                    calibration_provenance = {"status": "refused", "reason": errors["camera"]}
+                    capture = archive = None
+                    context = {}
             if look is not None and seed_source.startswith("authenticated"):
                 seed["seed"] = server._reference_ball_from_look(look)
             shot = _fresh_ops(entry, start, number, sample_rate, club)
@@ -401,11 +523,12 @@ def replay_full_shot(
                     .get("sha256"),
                 },
                 "camera_fusion_context": produced.get("camera_fusion_context"),
+                "calibration": calibration_provenance,
                 "limitations": [
                     "own saved inputs with current producers; native acquisition/physical "
                     "matching not reconstructed",
-                    "local camera calibration files are not loaded; unsupported calibrated "
-                    "geometry is refused and legacy inferred geometry remains labelled",
+                    "calibration uses only embedded original pair inputs; original file bytes "
+                    "are not restored and legacy inferred geometry remains labelled",
                     "impact is experimental; no physical accuracy or impact-to-screen "
                     "timing qualification",
                 ],
