@@ -1178,6 +1178,7 @@
   "tests/test_iwr6843_impact_time.py": "PRODUCT",
   "tests/test_iwr6843_iq8_qualification.py": "RESEARCH",
   "tests/test_iwr6843_launch_range.py": "FUSION",
+  "tests/test_iwr6843_ball_walk.py": "FUSION",
   "tests/test_iwr6843_lcmf_convention.py": "FUSION",
   "tests/test_iwr6843_lcmf_recovery.py": "FUSION",
   "tests/test_iwr6843_monitor.py": "FUSION",

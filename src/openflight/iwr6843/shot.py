@@ -90,6 +90,13 @@ def near_mti_notch(
 # produce thin ragged tracks whose angles AND speed are wrong; a product
 # says "no read" instead (2026-07-14: 3 driver + 2 5i captures)
 REJECT_RMS_BINS = 0.50
+# The OPS-blind search (``moving_ball_range_track``) keeps one peak per loop. With the
+# ball's four (tracking.BALL_MAX_PEAKS_PER_LOOP) it finds the ball on Oct 27 shot 1, but on
+# the field dumps its most-inliers rule then lifts the golfer's ~20 m/s walks over the ball
+# (Outdoors-test-1 001 / arm6 002, Outdoors-test-5 001: 20.2-20.7 m/s against OPS
+# 29.9-43.8 m/s) and gives Oct 24 shot 13's 20 m/s ball a 35 m/s walk. Only a search
+# bounded by the OPS speed takes the extra peaks.
+LCMF_SEARCH_MAX_PEAKS_PER_LOOP = 1
 REJECT_MIN_INLIERS = 28
 REJECT_MIN_SPAN_S = 0.015
 
@@ -353,6 +360,7 @@ def moving_ball_range_track(
         geometry,
         max_range_m=maximum_range_m,
         min_ball_ms=minimum_speed_ms,
+        max_peaks_per_loop=LCMF_SEARCH_MAX_PEAKS_PER_LOOP,
     )
     if track_broken(track) or (
         track is not None and near_mti_notch(track.speed_ms, loop_period_s=geometry.loop_period_s)
@@ -362,6 +370,7 @@ def moving_ball_range_track(
             geometry,
             max_range_m=maximum_range_m,
             min_ball_ms=minimum_speed_ms,
+            max_peaks_per_loop=LCMF_SEARCH_MAX_PEAKS_PER_LOOP,
         )
         if not track_broken(window_track) and (
             track_broken(track)
