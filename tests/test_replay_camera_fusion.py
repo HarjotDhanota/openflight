@@ -1,5 +1,8 @@
 import hashlib
 import json
+import os
+import subprocess
+import sys
 from datetime import datetime
 
 import numpy as np
@@ -142,6 +145,22 @@ def test_replay_comparison_keeps_integer_identity_exact_and_float_tolerance_expl
     assert _comparison_mismatches({"count": 1}, {"count": 1.0}) == ["$.count"]
     assert _comparison_mismatches({"value": 2.0}, {"value": 2.0 + 5e-10}) == []
     assert _comparison_mismatches({"value": 1e9}, {"value": 1e9 + 1e-3}) == ["$.value"]
+
+
+@pytest.mark.parametrize("hash_seed", ["1", "2"])
+def test_comparison_diagnostics_have_stable_nested_order_across_processes(hash_seed):
+    code = """
+import json
+from scripts.analysis.replay_camera_fusion import _comparison_mismatches
+recorded = {'z': {'q': 1, 'b': 2}, 'a': [1, 2], 'm': 3, 'c': 4}
+replayed = {'z': {'q': 7, 'b': 8}, 'a': [3, 4], 'm': 5, 'c': 6}
+print(json.dumps(_comparison_mismatches(recorded, replayed)))
+"""
+    environment = {**os.environ, "PYTHONHASHSEED": hash_seed}
+    completed = subprocess.run(
+        [sys.executable, "-c", code], env=environment, capture_output=True, text=True, check=True
+    )
+    assert json.loads(completed.stdout) == ["$.a[0]", "$.a[1]", "$.c", "$.m", "$.z.b", "$.z.q"]
 
 
 def test_cli_reports_expected_input_error_without_traceback(tmp_path, monkeypatch, capsys):

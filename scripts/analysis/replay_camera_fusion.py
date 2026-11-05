@@ -75,7 +75,7 @@ def _comparison_mismatches(recorded: Any, replayed: Any, path: str = "$") -> lis
         mismatches = []
         if recorded.keys() != replayed.keys():
             mismatches.append(f"{path}: object keys differ")
-        for key in recorded.keys() & replayed.keys():
+        for key in sorted(recorded.keys() & replayed.keys()):
             mismatches.extend(_comparison_mismatches(recorded[key], replayed[key], f"{path}.{key}"))
         return mismatches
     if isinstance(recorded, list) and isinstance(replayed, list):
