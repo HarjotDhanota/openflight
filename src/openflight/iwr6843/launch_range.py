@@ -1000,7 +1000,8 @@ def _anchor(
         return {**record, "status": "unanchored", "club_source": None}
     else:
         club_speed = float(club.speed_ms)
-        t_club = float(_crossing_s(club, anchor_m, res))
+        # the club meets the ball with its face, one ball radius short of the ball's centre
+        t_club = float(_crossing_s(club, anchor_m - CLUB_FACE_AT_CONTACT_M, res))
         prior_term = (
             abs(1.0 / ball.speed_ms - 1.0 / club.speed_ms) * PRIOR_AGREEMENT_SIGMAS * sigma_m
         )

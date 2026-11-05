@@ -276,3 +276,37 @@ def test_an_estimated_iwr_launch_point_confirms_no_located_tee_and_says_why(inpu
     )
     assert shot_range.source == lr.LOCATED_TEE_SOURCE
     assert "IWR launch point 1.9" in shot_range.reason and "(estimated)" in shot_range.reason
+
+
+def test_the_anchor_reads_the_club_where_its_face_meets_the_ball():
+    """The anchor's club crossing uses the contact time's geometry: the face one ball radius
+    short of the resting ball's centre (the radar sits behind the ball). A ball walk that
+    leaves the centre range 3.2 ms before the club's line reaches it left it 2.5 ms before
+    the face got there: inside one 3 ms frame, the ball."""
+    from openflight.iwr6843.tracking import BallTrack, Geometry  # noqa: PLC0415
+
+    res = 6.0 / 128
+    geometry = Geometry(24, 24, 2, 4, 128, 0.003, 0, range_fft_size=128)
+
+    def walk(speed_ms, at_s):
+        return BallTrack(
+            speed_ms=speed_ms,
+            slope_bins=speed_ms / res,
+            intercept_bins=(1.88 - speed_ms * at_s) / res,
+            rms_bins=0.3,
+            n_inliers=40,
+            t_first=0.005,
+            t_last=0.06,
+            low_confidence=False,
+        )
+
+    face_s = lr.CLUB_FACE_AT_CONTACT_M / 29.6
+    ball, club = walk(35.1, 0.0128), walk(29.6, 0.0128 + 0.0025 + face_s)
+    point = {"ball_walk": ball, "club_walk": club, "club_source": "approach_walk"}
+    capture = shot.PreparedShotDump(metadata={}, cube=None, geometry=geometry, range_domain=True)
+    prior = lr.LaunchRangePrior(1.88, 0.005, lr.LOCATED_TEE_SOURCE)
+
+    anchor = lr._anchor(capture, point, prior, 0.0)  # pylint: disable=protected-access
+
+    assert anchor["t_club_s"] - anchor["t_ball_s"] == pytest.approx(0.0025, abs=1e-6)
+    assert anchor["status"] == "agrees"
