@@ -68,8 +68,9 @@ class SessionFiles:
         return row.get("command")
 
     def wait(self, expected):
-        deadline = time.monotonic() + 900
-        while time.monotonic() < deadline:
+        """Keep stopped Next waits open; physical confirmations retain their deadline."""
+        deadline = None if expected == "next" else time.monotonic() + 900
+        while deadline is None or time.monotonic() < deadline:
             if self.command() == expected:
                 return
             time.sleep(0.1)
