@@ -282,6 +282,7 @@ class NativeFusionExtension(KioskExtension):
 
     def acquire(self, radar, processor, stop, started):
         """One controlled attempt; no new arm until the previous final publication."""
+        from openflight.iwr6843.driver import DumpTransferTiming
         from openflight.iwr6843.monitor import IWR6843Capture
 
         if self.publishing:
@@ -367,6 +368,8 @@ class NativeFusionExtension(KioskExtension):
                 dump_duration_ns=duration,
                 raw=(folder / "iwr-dump.bin").read_bytes(),
                 path=folder / "iwr-dump.bin",
+                # the attempt's own transfer marks, as the kiosk capture path logs them
+                dump_transfer_timing=DumpTransferTiming(**timing),
             )
         self.files.publish(
             "processing", message="Normal fusion is calculating this attempt's metrics."

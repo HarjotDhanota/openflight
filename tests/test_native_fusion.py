@@ -1,6 +1,7 @@
 """Native acquisition stays inside the ordinary fusion and publication boundaries."""
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,6 +19,7 @@ from openflight.camera.native_fusion import (
     NativeFusionExtension,
     bind_attempt,
 )
+from openflight.iwr6843.driver import DumpTransferTiming
 from tests.test_internal_sync_routes import Jobs
 from tests.test_tester_server import TESTER_SETUP, params
 
@@ -187,6 +189,15 @@ def test_normal_page_phase_controls_use_existing_job_owner(tmp_path):
     assert not jobs.started
 
 
+TIMING = DumpTransferTiming(
+    request_written_ns=100,
+    first_byte_ns=150,
+    header_complete_ns=160,
+    last_byte_ns=450,
+    cli_ready_ns=500,
+)
+
+
 @pytest.mark.parametrize("paired", [False, True])
 def test_native_capture_enters_existing_ops_parser_without_an_invented_epoch(tmp_path, paired):
     import threading
@@ -219,7 +230,7 @@ def test_native_capture_enters_existing_ops_parser_without_an_invented_epoch(tmp
         (folder / "iwr-dump.bin").write_bytes(b"original IWR bytes")
         result.update(
             ops_capture_observed=True,
-            iwr_raw={"transfer_timing": {"cli_ready_ns": 500, "request_written_ns": 100}},
+            iwr_raw={"transfer_timing": asdict(TIMING)},
         )
         if not paired:
             result["status"] = "partial"
@@ -233,6 +244,9 @@ def test_native_capture_enters_existing_ops_parser_without_an_invented_epoch(tmp
     if paired:
         assert owner.iwr_capture.raw == b"original IWR bytes"
         assert owner.iwr_capture.dump_duration_ns == 400
+        # the same transfer marks the kiosk path logs; no GATE, so no GATE latency
+        assert owner.iwr_capture.dump_transfer_timing == TIMING
+        assert owner.iwr_capture.gate_to_request_ns is None
     else:
         assert owner.association["status"] == "unpaired_ops_only"
 
