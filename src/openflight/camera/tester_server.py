@@ -311,8 +311,8 @@ ACTION_LABELS = {
     "analyze": "Analyse, review and package the session",
     "tee_range": "Capture automatic tee-range evidence",
 }
-# a hardware step that hangs is stopped; the ladder runs as long as the tester swings
-ACTION_TIMEOUT_S = {"preflight": 120.0, "gain": 900.0, "tee_range": 120.0, "internal_sync": 3600.0}
+# Finite acquisition steps expire; operator-paced sessions have no lifetime deadline.
+ACTION_TIMEOUT_S = {"preflight": 120.0, "gain": 900.0, "tee_range": 120.0}
 TEE_RANGE_ORIENTATION_DRIFT_DEG = 0.5
 STATIC_CAPTURE_SPAWN_GRACE_S = 10.0
 STATIC_CAPTURE_RESTART_GRACE_S = 120.0
@@ -3046,6 +3046,7 @@ class TesterJobManager:
             "returncode": None,
             "started_at": None,
             "finished_at": None,
+            "timeout_s": None,
         }
         self._output: deque[str] = deque(maxlen=MAX_LOG_LINES)
 
@@ -3084,6 +3085,7 @@ class TesterJobManager:
                 "returncode": None,
                 "started_at": datetime.now(timezone.utc).isoformat(),
                 "finished_at": None,
+                "timeout_s": ACTION_TIMEOUT_S.get(action),
             }
             self._thread = threading.Thread(
                 target=self._run,

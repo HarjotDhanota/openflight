@@ -25,10 +25,20 @@ useful partial evidence. A partial/error strike pauses for review; after three
 saved attempts Prepare stays disabled until the first two planned strikes are
 reviewed outside this guide. Slots are planned activities, not verified labels.
 The counter comes from the current server session, including after refresh.
-No RESET is needed between normal attempts. The stopped Next wait has no worker
-deadline, but the existing tester job has a one-hour limit from job.started_at;
-the page shows its remaining time. Restart requires physical switch/RESET access.
-Do not start a new RAM load unsupervised after Stop or failure.
+No RESET is needed between normal attempts. Neither the stopped Next wait nor
+the internal-sync parent job has a lifetime deadline. Each acquisition retains
+its finite RF/placement/armed limits, and manual Stop remains available. Job
+status reports timeout_s=null for no lifetime deadline; numeric values use
+job.started_at. The guide retains the legacy one-hour fallback only when an
+older runner omits timeout_s. Other timed tester jobs keep their deadlines.
+
+An eligible retained session can offer Resume loaded session. This is an
+explicit operator action, not a new RAM upload or normal-boot restoration.
+The server decides availability and checks the existing loaded runtime before
+showing Next; no swing or RF start follows Resume automatically. Keep power
+and IWR USB connected and do not press RESET. A refusal preserves the evidence
+and explains why Resume is unavailable. Do not start a new RAM load unsupervised
+after Stop or failure; a new load requires physical switch/RESET access.
 
 OPS v1.3.3 runs native speed triggering at 25 mph, magnitude 25, 30 ksps,
 six pre-trigger segments, with P3 acknowledged. GPIO27 records its sampling
@@ -78,7 +88,7 @@ Run the standalone mocked browser checks with
 `node --test ui/tests/internal-sync.browser.cjs` (the UI dependencies must be
 available). They do not run a backend or contact devices. Status freshness,
 pending/uncertain commands, the three-slot/partial-strike gates, terminal jobs,
-parent deadline and physical confirmations are included. A command is never
+reported/legacy timeouts, explicit Resume and physical confirmations are included. A command is never
 treated as a phase advance before the server reports it; stale/offline status
 disables controls. Stop remains available while a Next command awaits advance
 and status is current.

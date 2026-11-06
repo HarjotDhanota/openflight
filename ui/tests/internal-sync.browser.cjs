@@ -206,6 +206,64 @@ test('switch/reset confirmations, Stop, restoration and parent deadline remain e
   } finally { await f.context.close(); }
 });
 
+test('reported null, numeric and legacy timeouts control expiry without automatic commands', async () => {
+  const f = await fixture();
+  try {
+    const old = new Date(Date.now() - 4 * 3600000).toISOString();
+    await f.phase('next', { job: { action: 'internal_sync', state: 'running', started_at: old, timeout_s: null } });
+    assert.match(await f.page.locator('#deadline').innerText(), /No overall session expiry.*finite capture limits/);
+    assert.equal(await f.page.locator('#confirm').isEnabled(), true);
+    const next = await f.page.locator('#confirm').boundingBox();
+    assert.ok(next.y + next.height <= 400);
+    await f.phase('armed', { job: { action: 'internal_sync', state: 'running', started_at: old, timeout_s: 30 } });
+    assert.match(await f.page.locator('#instruction').innerText(), /time limit reached/);
+    assert.equal(await f.page.locator('#confirm').isVisible(), false);
+    assert.doesNotMatch(await f.page.locator('section[aria-live]').innerText(), /Within 30 seconds|make one swing|One dry swing/i);
+    await f.phase('next', { job: { action: 'internal_sync', state: 'running', started_at: new Date(Date.now() - 60000).toISOString(), timeout_s: 120 } });
+    assert.match(await f.page.locator('#deadline').innerText(), /1 min left/);
+    assert.equal(await f.page.locator('#confirm').isEnabled(), true);
+    await f.phase('next', { job: { action: 'internal_sync', state: 'running', started_at: old } });
+    assert.equal(await f.page.locator('#confirm').isDisabled(), true);
+    assert.match(await f.page.locator('#deadline').innerText(), /time limit reached/);
+    assert.deepEqual(f.commands, []);
+  } finally { await f.context.close(); }
+});
+
+test('Resume requires an explicit eligible-session tap and waits for checked runtime status', async () => {
+  const f = await fixture();
+  try {
+    await f.phase('stopped', { resume_available: true, resources_released: true, normal_boot_restore_needed: true, job: { action: 'internal_sync', state: 'stopped', timeout_s: null } });
+    assert.equal(await f.page.locator('#resume').isEnabled(), true);
+    const resume = await f.page.locator('#resume').boundingBox();
+    assert.ok(resume.y + resume.height <= 400);
+    if (process.env.OPENFLIGHT_UI_EVIDENCE) {
+      fs.mkdirSync(process.env.OPENFLIGHT_UI_EVIDENCE, { recursive: true });
+      await f.page.screenshot({ path: path.join(process.env.OPENFLIGHT_UI_EVIDENCE, 'resume-800x400.png') });
+    }
+    assert.match(await f.page.locator('#message').innerText(), /do not press RESET/);
+    assert.deepEqual(f.commands, []);
+    await f.page.locator('#resume').dblclick();
+    assert.equal(f.commands.length, 1);
+    assert.deepEqual(f.commands[0], { phase_token: f.mock.state.phase_token });
+    assert.equal(await f.page.locator('#resume').isDisabled(), true);
+    await f.phase('resuming', { resume_available: false, job: { action: 'internal_sync', state: 'running', timeout_s: null } });
+    assert.match(await f.page.locator('#instruction').innerText(), /checking the loaded runtime/);
+    assert.equal(await f.page.locator('#confirm').isVisible(), false);
+    await f.phase('next', { session_id: 'b'.repeat(32) });
+    assert.equal(await f.page.locator('#confirm').innerText(), 'Prepare dry swing');
+    assert.equal(await f.page.locator('#confirm').isEnabled(), true);
+    assert.equal(f.commands.length, 1);
+    await f.phase('stopped', { resume_available: false, resume_reason: 'runtime identity could not be verified', job: { action: 'internal_sync', state: 'stopped', timeout_s: null } });
+    assert.equal(await f.page.locator('#resume').isVisible(), false);
+    assert.match(await f.page.locator('#message').innerText(), /runtime identity could not be verified/);
+    await f.page.reload();
+    await f.page.waitForFunction(() => document.querySelector('#connection').textContent === 'Status connected');
+    assert.equal(await f.page.locator('#resume').isVisible(), false);
+    assert.equal(f.commands.length, 1);
+    assert.deepEqual(f.errors, []);
+  } finally { await f.context.close(); }
+});
+
 test('mouse and touch drags scroll without opening links; touchscreen tap opens one raw file', async () => {
   const f = await fixture();
   try {
