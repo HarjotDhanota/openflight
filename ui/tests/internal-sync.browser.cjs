@@ -82,6 +82,83 @@ function inspected(index, extra = {}) {
 }
 
 for (const [width, height] of [[1024, 600], [800, 480], [800, 400]]) {
+  test(`completed inspection returning to Next shows its outcome above the fold at ${width}x${height}`, async () => {
+    const f = await fixture({ width, height });
+    try {
+      const result = inspected(1, { iwr_lifecycle: { stop_acknowledged: true, stop_verified: true } });
+      await f.phase('next', { mode: 'ball_lock_inspection', attempts: [result], iwr: healthyIwr() });
+      const outcome = f.page.locator('#inspection-outcome');
+      assert.equal(await outcome.count(), 1);
+      assert.equal(await outcome.isVisible(), true);
+      assert.match(await outcome.innerText(), /attempt-001.*radar reported a lock.*trace saved/i);
+      assert.match(await outcome.innerText(), /radar stopped/i);
+      assert.match(await f.page.locator('#instruction').innerText(), /Inspection complete.*do not swing/i);
+      const box = await outcome.boundingBox();
+      assert.ok(box.y >= 0 && box.y + box.height <= height, 'result visible without scrolling');
+      for (const id of ['confirm', 'stop', 'end']) {
+        const action = await f.page.locator('#' + id).boundingBox();
+        assert.ok(action.y >= 0 && action.y + action.height <= height, `${id} visible without scrolling`);
+      }
+      assert.match(await f.page.locator('#sensors').innerText(), /last recorded observation.*not live/i);
+      assert.deepEqual(f.commands, []);
+      await f.page.reload();
+      await f.page.waitForFunction(() => document.querySelector('#connection').textContent === 'Status connected');
+      assert.match(await outcome.innerText(), /attempt-001.*radar reported a lock.*trace saved/i);
+      assert.deepEqual(f.commands, []);
+      if (process.env.OPENFLIGHT_UI_EVIDENCE) {
+        fs.mkdirSync(process.env.OPENFLIGHT_UI_EVIDENCE, { recursive: true });
+        await f.page.screenshot({ path: path.join(process.env.OPENFLIGHT_UI_EVIDENCE, `inspection-outcome-${width}x${height}.png`) });
+      }
+    } finally { await f.context.close(); }
+  });
+
+  test(`latest inspection summary retains timeout, Stop and partial outcomes honestly at ${width}x${height}`, async () => {
+    const f = await fixture({ width, height });
+    try {
+      const lifecycle = { stop_acknowledged: true, stop_verified: true };
+      const attempts = [inspected(1), inspected(2), inspected(3), inspected(4, { outcome: 'timeout', iwr_lifecycle: lifecycle })];
+      const summary = f.page.locator('#inspection-outcome');
+      await f.phase('next', { mode: 'ball_lock_inspection', attempts, iwr: healthyIwr() });
+      assert.match(await summary.innerText(), /attempt-004.*timed out.*trace saved/i);
+      assert.doesNotMatch(await summary.innerText(), /attempt-001|false positive|ball detected|ball present|empty lane|still control/i);
+      await f.page.locator('#confirm').tap();
+      assert.equal(f.commands.length, 1);
+      assert.doesNotMatch(await summary.innerText(), /Radar stopped; waiting/);
+      assert.equal(await f.page.locator('#confirm').isDisabled(), true);
+      await f.phase('learning_background');
+      assert.equal(await summary.isVisible(), false);
+      const stopped = inspected(5, { outcome: 'operator_stop', iwr_lifecycle: lifecycle });
+      await f.phase('paused', { attempts: [...attempts, stopped], retry_available: true });
+      assert.match(await summary.innerText(), /attempt-005.*stopped by operator.*trace saved.*Radar stopped/i);
+      assert.equal(await f.page.locator('#retry').isEnabled(), true);
+      const partial = inspected(6, { status: 'diagnostic_failed', outcome: 'interrupted', artifacts: ['RESULT.json', 'iwr-exchanges.json', 'ball-evidence/reply.bin'], cleanup_error: 'UART framing uncertain', iwr_lifecycle: { stop_acknowledged: true, stop_verified: false } });
+      await f.phase('paused', { attempts: [...attempts, stopped, partial], retry_available: false, retry_reason: 'UART framing uncertain' });
+      assert.match(await summary.innerText(), /attempt-006.*interrupted.*failed\/partial.*Stop not verified/i);
+      assert.doesNotMatch(await summary.innerText(), /trace saved|Radar stopped; waiting/);
+      assert.equal(await f.page.locator('#retry').isDisabled(), true);
+      for (const id of ['inspection-outcome', 'retry', 'end']) {
+        const box = await f.page.locator('#' + id).boundingBox();
+        assert.ok(box.y >= 0 && box.y + box.height <= height, `${id} visible with partial result`);
+      }
+      if (process.env.OPENFLIGHT_UI_EVIDENCE) await f.page.screenshot({ path: path.join(process.env.OPENFLIGHT_UI_EVIDENCE, `inspection-partial-outcome-${width}x${height}.png`) });
+      for (const phase of ['stopped', 'failed', 'finished']) {
+        await f.phase(phase);
+        assert.match(await summary.innerText(), /attempt-006.*failed\/partial/);
+        assert.match(await f.page.locator('#instruction').innerText(), /do not swing/i);
+      }
+      await f.phase('next', { attempts: [stopped] });
+      f.mock.network = 'offline';await f.page.evaluate(() => refresh());
+      assert.equal(await summary.isVisible(), true);
+      assert.match(await summary.innerText(), /Last attempt stop verified/);
+      assert.doesNotMatch(await summary.innerText(), /Radar stopped; waiting/);
+      assert.match(await f.page.locator('#instruction').innerText(), /Status unavailable.*do not swing/i);
+      assert.equal(await f.page.locator('#confirm').isDisabled(), true);
+      assert.equal(f.commands.length, 1);
+    } finally { await f.context.close(); }
+  });
+}
+
+for (const [width, height] of [[1024, 600], [800, 480], [800, 400]]) {
   test(`inspection starts explicitly and stays no-swing through retained or malformed states at ${width}x${height}`, async () => {
     const f = await fixture({ width, height });
     try {
