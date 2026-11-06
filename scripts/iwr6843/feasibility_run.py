@@ -50,8 +50,8 @@ RUN_ID = re.compile(r"\d{8}T\d{6}Z-[0-9a-f]{8}")
 PROFILE_NAME = re.compile(r"[A-Za-z0-9]+")
 IMAGE_SHA256 = re.compile(r"[0-9a-f]{64}")
 SOAK_STIMULI = ("none", "reflector")
-# The gate's frozen profiles run their config file unchanged; C16 is C with iq8Scale 16.
-FROZEN_PROFILES = ("A", "B", "C")
+# The gate and net profiles keep their config unchanged; C16 changes only iq8Scale.
+FROZEN_PROFILES = ("A", "B", "C", "net")
 CONTROL_PROFILE, CONTROL_SCALE = "C16", 16
 _PRE = re.compile(r"\bpre=(\d+)x\d+@(\d+)us\b")
 # One line's iq8Scale command (not a "%" comment, not "iq8ScaleX"); its line ending is kept.
@@ -708,7 +708,7 @@ def _parser() -> argparse.ArgumentParser:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument(
-        "--profile", required=True, choices=("A", "B", "C", "C16", "smoke", "warmup")
+        "--profile", required=True, choices=("A", "B", "C", "C16", "smoke", "warmup", "net")
     )
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--out-root", required=True, type=Path)

@@ -39,6 +39,28 @@ PLAN = (
 )
 CFG = "% profile\nframeCfg 0 2 12 0 3 1 0\ncaptureFormat iq8\niq8Scale 128\nsensorStart\n"
 IQ16_CFG = "% profile\nframeCfg 0 2 12 0 3 1 0\ncaptureFormat iq16\nsensorStart\n"
+
+
+def test_net_calibration_profile_is_available_without_a_precision_override():
+    args = RUN._parser().parse_args(
+        [
+            "--profile",
+            "net",
+            "--config",
+            "net.cfg",
+            "--out-root",
+            "runs",
+            "--image-sha256",
+            "ab" * 32,
+        ]
+    )
+
+    assert args.profile == "net"
+    assert RUN._effective_config("net", IQ16_CFG.encode(), None) == IQ16_CFG.encode()
+    with pytest.raises(ValueError, match="frozen"):
+        RUN._effective_config("net", IQ16_CFG.encode(), 128)
+
+
 IMAGE = "ab" * 32
 MS = 1_000_000
 HISTORY_NS = 27 * MS  # PLAN's pre-request history: 9 frames x 3000 us

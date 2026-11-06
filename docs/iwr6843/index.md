@@ -74,6 +74,11 @@ They also use the measured positive TDM sign for normal TX order. Automatic
 sign selection is reserved for offline diagnostics because multipath can select
 the mirrored sign and collapse the vertical two8 channel.
 
+For a separate, longer recording to investigate net impact, see the
+[experimental net-calibration capture](net-calibration-capture.md). It uses
+the standalone collector, is unvalidated on hardware, and does not replace
+these launch profiles or update setup distances.
+
 On the Pi, verify the checked-in image with:
 
 ```bash
