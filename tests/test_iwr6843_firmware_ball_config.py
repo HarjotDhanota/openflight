@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -186,8 +185,9 @@ def compiled_command(tmp_path_factory):
     compiler = fw.host_compiler_command()
     prefix = []
     convert = str
-    if compiler is None and os.name == "nt" and shutil.which("wsl"):
-        prefix = ["wsl", "-d", "Ubuntu-24.04", "--exec"]
+    wsl = os.environ.get("OPENFLIGHT_TEST_WSL_DISTRO") if compiler is None else None
+    if wsl and os.name == "nt":
+        prefix = ["wsl", "-d", wsl, "--exec"]
         compiler = [*prefix, "gcc"]
         convert = _linux_path
     if compiler is None:
