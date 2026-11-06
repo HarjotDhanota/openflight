@@ -5719,6 +5719,8 @@ static int32_t l3_cli_ball(int32_t argc, char *argv[])
     }
     if (argc >= 4 && argc <= 7 && strcmp(argv[1], "cfg") == 0) {
         l3_ball_cfg_t cfg;
+        l3_ball_t next;
+        uintptr_t key;
         unsigned long value;
         char *end;
         uint32_t waited = 0U;
@@ -5767,16 +5769,25 @@ static int32_t l3_cli_ball(int32_t argc, char *argv[])
             CLI_write("Error: ball cfg follow needs enable\n");
             return -1;
         }
-        /* Let a frame being scored finish, as triggerCfg does. */
+        /* Initialization computes powf rates with interrupts and rearm enabled. */
+        l3_ball_init(&next, &cfg);
         while (gBallBusy && waited < L3_TRIGGER_CFG_WAIT_MS) {
             Task_sleep(1);
             waited++;
         }
+        /* Rearm also reads gBall: publish only the complete reset to all readers. */
+        key = Hwi_disable();
+        if (gBallBusy) {
+            Hwi_restore(key);
+            CLI_write("Error: ball cfg busy\n");
+            return -1;
+        }
         gBallCfg = cfg;
-        l3_ball_init(&gBall, &gBallCfg);
+        gBall = next;
         memset(&gBallAngleClock, 0, sizeof(gBallAngleClock));
         gTrigDestBall = 0U;
         gTrigFallbackFrames = 0U;
+        Hwi_restore(key);
         CLI_write("Done\n");
         return 0;
     }
