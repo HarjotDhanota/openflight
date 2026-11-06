@@ -69,6 +69,8 @@ class ShotCollector(ActiveCollector):
         self.next_shot = 1
         self.fresh_runtime = False
         self.observed_ball = None
+        self.candidate_loss = None
+        self._pending_trigger_callback = False
         self.trigger_observation = None
         self.notice_rows = []
 
@@ -137,7 +139,9 @@ class ShotCollector(ActiveCollector):
         raw, _ = self.exchange("stats")
         capture = fields_for(raw, "frames=", ("frames", "active", "hwa_missed", "rf_faults"))
         trigger = fields_for(raw, "trig phase=", ("enabled", "latched", "phase"))
-        ball = fields_for(raw, "ball state=", ("state", "follow", "bin"))
+        ball = fields_for(
+            raw, "ball state=", ("state", "follow", "bin", "reason", "locks", "releases", "window")
+        )
         if capture["hwa_missed"] != "0" or capture["rf_faults"] != "0":
             raise ValueError("IWR reports RF fault or missed frame")
         return {"capture": capture, "trigger": trigger, "ball": ball}
@@ -155,6 +159,8 @@ class ShotCollector(ActiveCollector):
         # The pinned image resets ResultClock only at sensorStart and dump/release rearm.
         self.generation += 1
         self.observed_ball = None
+        self.candidate_loss = None
+        self._pending_trigger_callback = False
         self.trigger_observation = None
         self.command("debugCfg 0")
         self.command("triggerCfg 32 1 0")
@@ -172,13 +178,48 @@ class ShotCollector(ActiveCollector):
             phase = state["ball"]["state"]
             publish("learning_background" if phase == "building" else "place_ball", state)
             if phase == "locked":
+                if state["ball"]["reason"] == "gone":
+                    self.sleep(0.1)
+                    continue
                 index = int(state["ball"]["bin"])
-                if state["ball"]["follow"] != "1" or index not in self.trigger_bins:
-                    raise ValueError("observed ball outside retained profile")
+                self._require_candidate(state, index)
                 self.observed_ball = (self.generation, index, state)
                 return index, state
             self.sleep(0.1)
         raise TimeoutError("no stable IWR ball placement observed")
+
+    def _require_candidate(self, state, index, previous=None):
+        """Require current firmware support, without inventing a confidence threshold."""
+        ball = state["ball"]
+        if index not in self.trigger_bins:
+            raise ValueError("observed ball outside retained profile")
+        if (
+            ball["state"] != "locked"
+            or ball["follow"] != "1"
+            or ball["reason"] != "none"
+            or int(ball["bin"]) != index
+        ):
+            raise ValueError("IWR ball candidate is not a current healthy lock")
+        if previous is not None and any(
+            ball[key] != previous[key] for key in ("locks", "releases", "window")
+        ):
+            raise ValueError("IWR ball candidate lock epoch or window changed")
+
+    def _note_candidate_loss(self, state):
+        """After enable, loss quiets guidance but cannot rule out a pending launch."""
+        if self.candidate_loss is not None:
+            return
+        try:
+            if self.observed_ball is None:
+                raise ValueError("IWR ball candidate observation missing")
+            self._require_candidate(state, self.observed_ball[1], self.observed_ball[2]["ball"])
+        except ValueError as error:
+            self.candidate_loss = {
+                "reason": str(error),
+                "ball": deepcopy(state["ball"]),
+                "host_observed_mono_ns": self.now(),
+                "physical_timing_qualified": False,
+            }
 
     def arm(self, index):
         """Only a bin observed by wait_ball may be enabled by the caller."""
@@ -188,14 +229,23 @@ class ShotCollector(ActiveCollector):
             or self.observed_ball[:2] != (self.generation, index)
         ):
             raise ValueError("observed tee bin outside profile")
-        self.command(f"triggerCfg {index} 1 1")
         state = self.snapshot()
+        self._require_candidate(state, index, self.observed_ball[2]["ball"])
         if (
             state["capture"]["active"] != "1"
-            or state["trigger"]["enabled"] != "1"
             or state["trigger"]["latched"] != "0"
+            or state["trigger"]["enabled"] != "0"
         ):
+            raise ValueError("IWR not ready before arming")
+        self.command(f"triggerCfg {index} 1 1")
+        state = self.snapshot()
+        if state["trigger"]["latched"] == "1":
+            self._observe_trigger(state, "polled_latch", self.now(), None)
+            self._pending_trigger_callback = True
+            return state
+        if state["capture"]["active"] != "1" or state["trigger"]["enabled"] != "1":
             raise ValueError("IWR did not arm cleanly")
+        self._note_candidate_loss(state)
         return state
 
     def wait_notice(self, budget_s):
@@ -267,6 +317,12 @@ class ShotCollector(ActiveCollector):
         not held back by the poll interval; a polled latch still notifies without it.
         """
         deadline = min(self.deadline_ns, self.now() + 30_000_000_000)
+        if self._pending_trigger_callback:
+            if cancelled():
+                raise InterruptedError("session stopped")
+            self._pending_trigger_callback = False
+            if on_trigger is not None:
+                on_trigger(deepcopy(self.trigger_observation))
         state = None
         while self.now() < deadline:
             if cancelled():
@@ -274,7 +330,18 @@ class ShotCollector(ActiveCollector):
             state = self.snapshot()
             if state["trigger"]["latched"] == "1" and self.trigger_observation is None:
                 self._observe_trigger(state, "polled_latch", self.now(), on_trigger)
-            publish("armed", state)
+            if self.trigger_observation is None:
+                self._note_candidate_loss(state)
+            publish(
+                "candidate_lost"
+                if self.candidate_loss and self.trigger_observation is None
+                else "armed",
+                {
+                    **state,
+                    "candidate_loss": self.candidate_loss,
+                    "trigger_observed": self.trigger_observation is not None,
+                },
+            )
             if state["trigger"]["latched"] == "1" and state["capture"]["active"] == "0":
                 raw, _ = self.exchange("triggerLog result", done_count=2)
                 if fields_for(raw, "result ", ("ready",))["ready"] != "1":

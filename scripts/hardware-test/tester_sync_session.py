@@ -177,8 +177,11 @@ def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None
         files.publish(
             phase,
             iwr=state,
-            message="IWR latch observed; hold still while capture completes."
-            if phase == "armed" and state.get("trigger", {}).get("latched") == "1"
+            message="IWR trigger observed; hold still while capture completes."
+            if phase == "armed"
+            and (state.get("trigger", {}).get("latched") == "1" or state.get("trigger_observed"))
+            else "IWR candidate lost; do not swing. Waiting only within the finite capture budget."
+            if phase == "candidate_lost"
             else "Armed: make one swing. The IWR decides; OPS and camera follow."
             if phase == "armed" and iwr_master
             else "Armed: make one swing. Both radars decide independently."
@@ -215,7 +218,10 @@ def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None
         collector.begin()
         index, address = collector.wait_ball(observe, cancelled)
         result["address_observation"] = address
-        files.publish("preparing_sensors", message="Stay still while the camera and OPS arm.")
+        files.publish(
+            "preparing_sensors",
+            message="IWR candidate reported; stay still while the camera and OPS prepare. This is not verified ball presence.",
+        )
         camera = camera or CameraCaptureRuntime(
             output_dir=folder / "ops-camera/camera",
             use_gpio_trigger=False,

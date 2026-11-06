@@ -1,8 +1,11 @@
 """Synthetic self-trigger lifecycle checks; no physical accuracy claims."""
 
 import base64
+import json
 import os
 import struct
+import sys
+import threading
 import zlib
 from copy import deepcopy
 from pathlib import Path
@@ -27,6 +30,8 @@ class ShotPort(WIRE.Port):
         self.allowed = ShotCollector.LIFECYCLE_COMMANDS
         self.double = ShotCollector.DOUBLE_COMPLETION_COMMANDS
         self.ball_bin = 51
+        self.ball_state, self.ball_reason = "locked", "none"
+        self.ball_locks, self.ball_releases = 1, 0
         self.active = self.enabled = False
         self.generation, self.shot = 0, 1
         self.completed_shots = 0
@@ -68,7 +73,8 @@ class ShotPort(WIRE.Port):
                 self.pending = (
                     f"frames={101 if self.generation else 0} active={int(self.active)} rf_faults=0 hwa_missed=0\n"
                     f"trig phase=ARMED enabled={int(self.enabled)} latched={int(self.held)}\n"
-                    f"ball state=locked follow=1 bin={self.ball_bin}\nDone\nl3dump:/>"
+                    f"ball state={self.ball_state} follow=1 bin={self.ball_bin} reason={self.ball_reason} "
+                    f"locks={self.ball_locks} releases={self.ball_releases} window=20+53 ratio=0.00 confidence=0.00\nDone\nl3dump:/>"
                 ).encode()
             else:
                 count = 2 if command in self.double else 1
@@ -109,6 +115,279 @@ def wire(chunk=65536, **plan):
     port.double = collector.DOUBLE_COMPLETION_COMMANDS
     collector.establish_fresh_runtime()
     return collector, port
+
+
+@pytest.mark.parametrize(
+    "ball",
+    [
+        "state=waiting follow=1 bin=0",
+        "state=locked follow=1 bin=21",
+        "state=locked follow=0 bin=20",
+    ],
+)
+def test_arm_rechecks_the_same_current_ball_lock_before_enabling(monkeypatch, ball):
+    collector, port = wire()
+    port.ball_bin = 20
+    collector.begin()
+    index, _ = collector.wait_ball(lambda *_: None, lambda: False)
+    assert index == 20
+    original = port.write
+
+    def changed_ball(data):
+        count = original(data)
+        if data == b"stats\n":
+            port.pending = port.pending.replace(
+                b"ball state=locked follow=1 bin=20", b"ball " + ball.encode()
+            )
+        return count
+
+    monkeypatch.setattr(port, "write", changed_ball)
+    before = len(port.writes)
+    with pytest.raises(ValueError, match="(?i)ball|lock"):
+        collector.arm(index)
+    assert b"triggerCfg 20 1 1\n" not in port.writes[before:]
+
+
+def test_initial_gone_lock_waits_for_healthy_candidate_without_a_confidence_floor():
+    collector, port = wire()
+    port.ball_reason = "gone"
+    collector.begin()
+    seen = []
+
+    def observe(_phase, snapshot):
+        seen.append(snapshot["ball"]["reason"])
+        assert collector.observed_ball is None
+        port.ball_reason = "none"
+
+    index, evidence = collector.wait_ball(observe, lambda: False)
+    assert seen == ["gone", "none"] and index == 51
+    assert evidence["ball"]["ratio"] == evidence["ball"]["confidence"] == "0.00"
+    assert not any(
+        command in port.writes for command in (b"triggerCfg 20 1 1\n", b"triggerCfg 51 1 1\n")
+    )
+
+
+def test_only_gone_candidate_expires_without_preparing_or_enabling():
+    collector, port = wire()
+    collector.begin()
+    port.ball_reason = "gone"
+    collector.deadline_ns = collector.now() + 100_000_000
+    with pytest.raises(TimeoutError):
+        collector.wait_ball(lambda *_: None, lambda: False)
+    assert collector.observed_ball is None
+    assert b"triggerCfg 51 1 1\n" not in port.writes
+
+
+def test_loss_and_reacquisition_at_the_same_bin_does_not_reuse_an_old_lock():
+    collector, port = wire()
+    collector.begin()
+    index, _ = collector.wait_ball(lambda *_: None, lambda: False)
+    port.ball_locks, port.ball_releases = 2, 1
+    before = len(port.writes)
+    with pytest.raises(ValueError, match="(?i)ball|lock"):
+        collector.arm(index)
+    assert f"triggerCfg {index} 1 1\n".encode() not in port.writes[before:]
+
+
+def test_post_enable_candidate_loss_waits_quietly_then_stops_and_keeps_evidence(
+    tmp_path, monkeypatch
+):
+    import tester_sync_session as tools
+
+    collector, port = wire()
+    port.ball_bin = 20
+    original = port.write
+
+    def lose_after_enable(data):
+        count = original(data)
+        if data == b"triggerCfg 20 1 1\n":
+            port.ball_state, port.ball_bin = "waiting", 0
+            port.ball_releases += 1
+        return count
+
+    monkeypatch.setattr(port, "write", lose_after_enable)
+    original_begin = collector.begin
+
+    def bounded_begin():
+        original_begin()
+        collector.deadline_ns = collector.now() + 150_000_000
+
+    monkeypatch.setattr(collector, "begin", bounded_begin)
+    monkeypatch.setattr(collector, "wait_notice", lambda budget: collector.sleep(budget))
+    closed, started = [], []
+
+    class Rig:
+        arm_id, boot_id, trace_attempt_id = "arm", "synthetic-boot", "trace"
+        native_capture = False
+
+        def __init__(self, **_kwargs):
+            self.stop = threading.Event()
+
+        def prepare(self):
+            pass
+
+        def start_wait(self):
+            started.append(True)
+
+        def close(self):
+            closed.append(self.stop.is_set())
+
+    monkeypatch.setitem(sys.modules, "joint_clock_rig", SimpleNamespace(RigControl=Rig))
+    monkeypatch.setattr(
+        tools, "camera_evidence", lambda *_a, **_k: {"status": "missing_or_ambiguous", "clips": []}
+    )
+    files = tools.SessionFiles(tmp_path / "session")
+    result = tools.attempt(
+        collector,
+        files,
+        files.folder / "attempt-001",
+        camera=SimpleNamespace(output_dir=tmp_path / "camera"),
+        radar=object(),
+    )
+    assert port.writes.index(b"sensorStop\n") > port.writes.index(b"triggerCfg 20 1 1\n")
+    assert collector.state["stop_verified"] and not port.active
+    assert closed == [True]
+    assert started == [True] and "TimeoutError" in result["error"]
+    rows = [
+        json.loads(line)
+        for line in (files.folder / "attempt-001/iwr-observations.jsonl").read_text().splitlines()
+    ]
+    assert rows[-1]["phase"] == "candidate_lost"
+    assert all(row["phase"] != "armed" for row in rows)
+    assert "do not swing" in files.state["message"]
+    assert (files.folder / "attempt-001/RESULT.json").is_file()
+    assert files.state["attempts"][0]["status"] == "partial"
+
+
+def test_waiting_ball_cannot_remain_published_as_armed_before_any_latch(monkeypatch):
+    collector, port = wire()
+    port.ball_bin = 20
+    collector.begin()
+    index, _ = collector.wait_ball(lambda *_: None, lambda: False)
+    collector.arm(index)
+    original = port.write
+
+    def released_ball(data):
+        count = original(data)
+        if data == b"stats\n":
+            port.pending = port.pending.replace(
+                b"ball state=locked follow=1 bin=20", b"ball state=waiting follow=1 bin=0"
+            )
+        return count
+
+    monkeypatch.setattr(port, "write", released_ball)
+    monkeypatch.setattr(collector, "wait_notice", lambda budget: collector.sleep(budget))
+    collector.deadline_ns = collector.now() + 100_000_000
+    published = []
+    with pytest.raises(TimeoutError):
+        collector.wait_result(lambda phase, state: published.append((phase, state)), lambda: False)
+    assert not any(phase == "armed" for phase, _state in published)
+    assert published and all(phase == "candidate_lost" for phase, _state in published)
+
+
+def test_latched_result_remains_retrievable_after_ball_candidate_departure(monkeypatch):
+    collector, port = wire()
+    port.ball_bin = 20
+    collector.begin()
+    index, _ = collector.wait_ball(lambda *_: None, lambda: False)
+    collector.arm(index)
+    port.active, port.held = False, True
+    original = port.write
+
+    def departed_ball(data):
+        count = original(data)
+        if data == b"stats\n":
+            port.pending = port.pending.replace(
+                b"ball state=locked follow=1 bin=20", b"ball state=waiting follow=1 bin=0"
+            )
+        return count
+
+    monkeypatch.setattr(port, "write", departed_ball)
+    held = collector.wait_result(lambda *_: None, lambda: False)
+    assert held["record"]["shot_id"] == 1
+    assert b"triggerLog result\n" in port.writes
+
+
+@pytest.mark.parametrize("attribute,value", [("active", False), ("enabled", True), ("held", True)])
+def test_pre_enable_rf_and_trigger_state_must_still_be_fresh(attribute, value):
+    collector, port = wire()
+    collector.begin()
+    index, _ = collector.wait_ball(lambda *_: None, lambda: False)
+    setattr(port, attribute, value)
+    before = len(port.writes)
+    with pytest.raises(ValueError, match="before arming"):
+        collector.arm(index)
+    assert f"triggerCfg {index} 1 1\n".encode() not in port.writes[before:]
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_immediate_post_enable_latch_preserves_observation_and_honours_stop(monkeypatch, cancel):
+    collector, port = wire()
+    collector.begin()
+    index, _ = collector.wait_ball(lambda *_: None, lambda: False)
+    original = port.write
+
+    def latch_after_enable(data):
+        count = original(data)
+        if data == f"triggerCfg {index} 1 1\n".encode():
+            port.complete_shot()
+            port.ball_state, port.ball_bin = "waiting", 0
+            port.ball_releases += 1
+        return count
+
+    monkeypatch.setattr(port, "write", latch_after_enable)
+    state_after_arm = collector.arm(index)
+    assert state_after_arm["capture"]["active"] == "0"
+    observed = deepcopy(collector.trigger_observation)
+    assert observed["exchange_index"] == len(collector.rows) - 1
+    callbacks = []
+    if cancel:
+        with pytest.raises(InterruptedError):
+            collector.wait_result(lambda *_: None, lambda: True, on_trigger=callbacks.append)
+        assert callbacks == [] and collector.next_shot == 1
+        assert b"triggerLog result\n" not in port.writes
+    else:
+        held = collector.wait_result(lambda *_: None, lambda: False, on_trigger=callbacks.append)
+        assert held["record"]["shot_id"] == 1
+        assert callbacks == [observed]
+        assert (
+            callbacks[0]["stats_exchange"]["cli_ready_ns"]
+            == collector.rows[observed["exchange_index"]]["cli_ready_ns"]
+        )
+
+
+def test_gone_then_reacquired_candidate_stays_quiet_until_delayed_trigger_notice(monkeypatch):
+    collector, port = wire()
+    collector.begin()
+    index, _ = collector.wait_ball(lambda *_: None, lambda: False)
+    collector.arm(index)
+    port.ball_reason = "gone"
+    polls = []
+
+    def notice(budget):
+        polls.append(True)
+        collector.sleep(budget)
+        if len(polls) == 1:
+            port.ball_reason = "none"
+            port.ball_locks, port.ball_releases = 2, 1
+            return None
+        port.complete_shot()
+        port.ball_state, port.ball_bin = "waiting", 0
+        return port.clock()
+
+    monkeypatch.setattr(collector, "wait_notice", notice)
+    published, callbacks = [], []
+    held = collector.wait_result(
+        lambda phase, state: published.append((phase, state)),
+        lambda: False,
+        on_trigger=callbacks.append,
+    )
+    assert held["record"]["shot_id"] == 1 and len(callbacks) == 1
+    assert [phase for phase, _ in published] == ["candidate_lost", "candidate_lost", "armed"]
+    assert published[1][1]["ball"]["reason"] == "none"
+    assert published[1][1]["candidate_loss"] == published[0][1]["candidate_loss"]
+    assert published[-1][1]["trigger_observed"] is True
+    assert callbacks[0]["notice_source"] == "triggered_line"
 
 
 @pytest.mark.parametrize("chunk", [1, 17, 65536])
@@ -308,11 +587,19 @@ def fake():
     return collector
 
 
-def state(ball="locked", index=51, active="1", latched="0"):
+def state(ball="locked", index=51, active="1", latched="0", enabled="1"):
     return {
         "capture": {"active": active},
-        "trigger": {"enabled": "1", "latched": latched},
-        "ball": {"state": ball, "follow": "1", "bin": str(index)},
+        "trigger": {"enabled": enabled, "latched": latched},
+        "ball": {
+            "state": ball,
+            "follow": "1",
+            "bin": str(index),
+            "reason": "none",
+            "locks": "1",
+            "releases": "0",
+            "window": "20+53",
+        },
     }
 
 
@@ -328,7 +615,7 @@ def test_finite_profile_and_detector_enabled_after_start():
 def test_observed_lock_seeds_region_and_not_a_nominal_default():
     c = fake()
     c.begin()
-    c.snapshot = lambda: state()
+    c.snapshot = lambda: state(enabled="1" if c.commands[-1] == "triggerCfg 51 1 1" else "0")
     index, evidence = c.wait_ball(lambda *_: None, lambda: False)
     assert index == 51 and evidence["ball"]["state"] == "locked"
     c.arm(index)
