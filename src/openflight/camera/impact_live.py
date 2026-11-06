@@ -151,7 +151,7 @@ class LiveAnalyser:
         number = job.get("shot_number")
         clip = impact_session.Clip(path.name, path, path.name, run_dir=path.parent)
         run = impact_session.RunRecord(
-            {"config": dict(job.get("start") or {})},
+            {"config": dict(job.get("start") or {}), "session_uuid": job.get("session_uuid")},
             {number: dict(job.get("shot") or {})},
             {path.name: number},
             {},
@@ -197,8 +197,14 @@ class LiveAnalyser:
             "ball_range_source": clip.range_source,
             "stages_ms": stages,
             "dynamic_lie": clip.extra.get("dynamic_lie"),
+            "angle_input_decisions": clip.extra.get("angle_input_decisions", {}),
+            "range_input_decision": clip.extra.get("range_input_decision", {}),
+            "optics_input_decision": clip.extra.get("optics_input_decision", {}),
         }
-        pool = self._pools.setdefault(f"{clip.club}_{clip.frame_size}", _Pool())
+        pool_key = f"{clip.club}_{clip.frame_size}"
+        if clip.extra.get("optics_template_key"):
+            pool_key += "_" + clip.extra["optics_template_key"]
+        pool = self._pools.setdefault(pool_key, _Pool())
 
         def finish(reading: dict[str, Any]) -> dict[str, Any]:
             reading.setdefault("template", self._template_note(pool))
