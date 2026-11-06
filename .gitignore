@@ -1,6 +1,8 @@
 # The OpenFlight fork clone and its git worktrees are their own repositories
 openflight/
 openflight-*/
+review-saki/
+worktrees/
 
 # Python
 __pycache__/
