@@ -7667,7 +7667,7 @@ def _finalize_shot_detected(
         )
         _publish_phone_shot(shot_data, final=phone_final, enrichment=phone_enrichment)
 
-    if shot_data is not None:
+    if shot_data is not None and (not awaits_late_result or late_update is not None):
         _tell_extensions_shot_published(shot, "first" if late_update is None else "late_update")
 
     if late_update is not None:
