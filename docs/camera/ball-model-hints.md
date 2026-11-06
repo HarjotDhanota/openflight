@@ -52,3 +52,35 @@ and sustained load still need qualification. A subsequent movement recording
 exposed missed relocated balls and an occluder mistaken for a ball. Faster refresh
 does not fix classification. This remains an experimental API, off by default;
 no live tracking, size accuracy or Ready-time improvement is qualified.
+
+## Audit data before retraining
+
+Run the read-only preflight on each source dataset before combining it, and on
+the combined dataset before training:
+
+```bash
+uv run python scripts/vision/audit_golf_training.py /path/to/source-dataset
+uv run python scripts/vision/audit_golf_training.py /path/to/combined_dataset
+```
+
+The JSON report lists errors, image/label hashes, explicit empty annotations and
+byte-identical images shared across splits. A nonzero exit means the data needs
+review. The tool never rewrites labels, deletes files or starts training.
+
+The YOLO11 training notebook calls this check before copying each downloaded
+dataset and immediately before training. Upload `audit_golf_training.py` beside
+the notebook in Colab, or place it in the notebook's working directory. It uses
+the notebook's existing PyYAML dependency. Classes must already describe one
+golf-ball class with ID zero; other objects must not be silently renamed.
+
+The supported layout has `data.yaml` pointing to paired `images` and `labels`
+directories for train/validation and optional test splits. Empty label files
+explicitly mark negative images; missing labels require review. Segmentation
+rows and image-list manifests are not accepted as detection data. This checks
+annotation format and exact file duplication, not annotation truth, image
+decoding, recompressed duplicates or independence between adjacent frames.
+Keep complete recording sessions and setups separate when evaluating a model.
+Parent-relative Roboflow paths use the existing-directory-first fallback used
+by the trainer; the audit records the files it actually read.
+It scans JPEG, PNG, BMP, WebP and TIFF images; other image formats need separate
+review.
