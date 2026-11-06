@@ -218,6 +218,35 @@ def test_unknown_candidate_reason_remains_a_terminal_contract_error():
     assert type(error.value) is ValueError
 
 
+def test_accepted_stop_between_profile_commands_prevents_rf_start_without_poisoning():
+    collector, port = wire()
+    boundaries = []
+
+    def stopped():
+        boundaries.append(True)
+        if len(boundaries) == 3:
+            raise InterruptedError("accepted stop")
+
+    collector.command_boundary = stopped
+    with pytest.raises(InterruptedError, match="accepted stop"):
+        collector.begin()
+    assert b"sensorStart\n" not in port.writes
+    assert not collector.failed and not port.active
+
+
+def test_cancelled_exchange_boundary_does_not_write_or_poison_uart():
+    collector, port = wire()
+    before = len(port.writes)
+
+    def stopped():
+        raise InterruptedError("accepted stop")
+
+    collector.command_boundary = stopped
+    with pytest.raises(InterruptedError, match="accepted stop"):
+        collector.snapshot()
+    assert len(port.writes) == before and not collector.failed
+
+
 def test_post_enable_candidate_loss_waits_quietly_then_stops_and_keeps_evidence(
     tmp_path, monkeypatch
 ):

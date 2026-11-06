@@ -77,6 +77,7 @@ class ShotCollector(ActiveCollector):
         self._pending_trigger_callback = False
         self.trigger_observation = None
         self.notice_rows = []
+        self.command_boundary = None
 
     def establish_fresh_runtime(self):
         """Only the RAM loader's fresh startup may initialize generation tracking."""
@@ -132,11 +133,19 @@ class ShotCollector(ActiveCollector):
 
     def exchange(self, *args, **kwargs):
         """An interrupted reply must never be followed by speculative cleanup writes."""
+        if self.command_boundary is not None:
+            self.command_boundary()
         try:
             return super().exchange(*args, **kwargs)
         except BaseException:
             self.failed = True
             raise
+
+    def command(self, command):
+        """Honor cooperative controls before sending, never in an incomplete reply."""
+        if self.command_boundary is not None:
+            self.command_boundary()
+        return super().command(command)
 
     def snapshot(self):
         """Retain state without interpreting a fitted crossing as sample time."""
