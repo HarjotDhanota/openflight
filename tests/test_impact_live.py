@@ -2,7 +2,7 @@
 
 A running outline per club is built from the session's own swings; until it has
 enough swings a shot says how far along it is, every other refusal is named,
-and a reading still being worked on when the next shot arrives is dropped.
+and a late reading remains attached to its own shot when subsequent shots arrive.
 """
 
 from __future__ import annotations
@@ -29,6 +29,8 @@ from openflight.launch_monitor import Shot  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_camera_impact_location as synthetic  # noqa: E402
+from impact_angle_fixtures import bind_test_angles  # noqa: E402
+from impact_range_fixtures import bind_test_range  # noqa: E402
 
 RIG = json.loads(
     (Path(__file__).resolve().parents[1] / "config" / "enclosure_v3_rig_geometry.json").read_text(
@@ -74,6 +76,8 @@ def write_clip(folder: Path, *, truth_mm: float = 8.0, mirror: bool = False, **r
         frames=frames,
         pre_trigger_count=np.int32(11),
         exposure_us=np.full(len(frames), 300.0),
+        sensor_timestamp_ns=1_000_000_000
+        + np.arange(len(frames), dtype=np.int64) * round(1e9 / synthetic.FPS),
     )
     (folder / "metadata.json").write_text(
         json.dumps({"delivered_fps": synthetic.FPS, "settings": {"mirror_horizontal": False}}),
@@ -118,7 +122,11 @@ class Session:
             "session_uuid": self.uuid,
             "shot_number": self.count,
             "clip_path": str(clip),
-            "shot": shot_record(self.count, club=club, **kwargs),
+            "shot": bind_test_range(
+                bind_test_angles(shot_record(self.count, club=club, **kwargs), clip / "frames.npz"),
+                clip / "frames.npz",
+                self.uuid,
+            ),
             "start": START,
             "handedness": handedness,
         }
@@ -346,19 +354,19 @@ def test_a_reading_is_put_on_the_shot_published_and_logged(kiosk):
     assert record["analysis_ms"] == 812.0
 
 
-def test_a_reading_still_open_when_the_next_shot_arrives_is_dropped(kiosk):
+def test_a_reading_still_open_when_the_next_shot_arrives_is_retained(kiosk):
     first = _kiosk_shot(1)
     kiosk.extension.on_camera_capture(first, _capture())
     kiosk.extension.after_shot_published(first, update_kind="first")
     kiosk.extension.on_shot_accepted(_kiosk_shot(2))
-    assert first.impact_location["status"] == "dropped"
-    assert first.impact_location["reason"] == live.DROPPED_REASON
-    assert kiosk.runner.cancelled == [kiosk.runner.jobs[0]["job_id"]]
-    assert kiosk.log.events[0][1]["status"] == "dropped"
+    assert first.impact_location is None
+    assert kiosk.runner.cancelled == []
+    assert kiosk.log.events == []
     kiosk.extension.dispatcher.on_result(
         {"job_id": kiosk.runner.jobs[0]["job_id"], "reading": {"status": "ok"}}
     )
-    assert first.impact_location["status"] == "dropped"
+    assert first.impact_location["status"] == "ok"
+    assert kiosk.log.events[0][1]["status"] == "ok"
     assert len(kiosk.published) == 1
 
 
@@ -449,6 +457,7 @@ def test_a_worker_that_cannot_start_refuses_the_shot_by_name(monkeypatch):
 def test_a_kiosk_shot_with_a_clip_is_read_and_shown_as_a_shot_update(tmp_path, monkeypatch):
     from openflight import kiosk_extensions  # noqa: PLC0415
     from openflight.clubs import ClubType  # noqa: PLC0415
+    from openflight.session_logger import SessionLogger  # noqa: PLC0415
 
     emitted = []
     monkeypatch.setattr(
@@ -456,7 +465,9 @@ def test_a_kiosk_shot_with_a_clip_is_read_and_shown_as_a_shot_update(tmp_path, m
         "emit",
         lambda event, payload=None, **_: emitted.append((event, payload)),
     )
-    monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+    log = SessionLogger(log_dir=tmp_path / "logs", enabled=True)
+    log.start_session(mode="rolling-buffer", trigger_type="sound")
+    monkeypatch.setattr(server_module, "get_session_logger", lambda: log)
     extension = live.ImpactLiveExtension(
         runner_factory=lambda on_result: live.ProcessRunner(
             on_result, settings={"swings_needed": 1}
@@ -476,7 +487,14 @@ def test_a_kiosk_shot_with_a_clip_is_read_and_shown_as_a_shot_update(tmp_path, m
             ball_range_source="iwr_post_impact",
             ball_range_uncertainty_m=0.03,
         )
-        extension.on_camera_capture(shot, _capture(str(write_clip(tmp_path / "camera_001"))))
+        clip = write_clip(tmp_path / "camera_001")
+        shot.camera_fusion_session_uuid = log.active_session_uuid
+        shot.impact_timestamp = 100.0
+        shot.ball_range_label = "measured"
+        shot.impact_range_evidence = bind_test_range(
+            shot_record(1), clip / "frames.npz", log.active_session_uuid
+        )["impact_range_evidence"]
+        extension.on_camera_capture(shot, _capture(str(clip)))
         server_module._finalize_shot_detected(shot, emit_event="shot")  # pylint: disable=protected-access
         deadline = time.monotonic() + 120.0
         while (
@@ -486,6 +504,7 @@ def test_a_kiosk_shot_with_a_clip_is_read_and_shown_as_a_shot_update(tmp_path, m
     finally:
         kiosk_extensions.unregister(extension)
         extension.on_shutdown()
+        log.end_session()
     assert [event for event, _ in emitted] == ["shot", "shot_update"]
     update = emitted[-1][1]["shot"]
     assert update["impact_location"]["status"] == "ok", update["impact_location"]["reason"]

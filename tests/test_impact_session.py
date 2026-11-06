@@ -20,6 +20,8 @@ from openflight.camera import (  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_camera_impact_location as synthetic  # noqa: E402
+from impact_angle_fixtures import bind_test_angles  # noqa: E402
+from impact_range_fixtures import bind_test_range  # noqa: E402
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "analysis" / "impact_location.py"
 _spec = importlib.util.spec_from_file_location("impact_location_cli", SCRIPT)
@@ -33,6 +35,102 @@ RIG = json.loads(
     )
 )
 CLIP = "camera_20261020_100001_000_001"
+
+
+def test_explicit_optics_candidate_is_not_silently_ignored(tmp_path):
+    from tests.camera_helpers import calibration_artifact
+
+    root = write_session(tmp_path)
+    clip = session.find_clips(root)[0]
+    run = session.read_run(clip.run_dir)
+    options = session.Options(ball=(320, 200, 26))
+    options.optical_calibration = calibration_artifact()
+    session.prepare_clip(clip, {clip.run_dir: run}, {}, options)
+    assert clip.error == "calibrated_optics: raw ball override requires rectified coordinates"
+    assert clip.prepared is None
+
+
+def test_capture_bound_calibrated_context_reaches_impact_and_live_diagnostics(tmp_path):
+    from openflight.camera.calibrated_projection import build_calibrated_camera_model
+    from openflight.camera.fusion_processing import build_context
+    from openflight.camera.impact_live import LiveAnalyser
+    from openflight.rig_geometry import geometry_fingerprint
+    from tests.camera_helpers import calibration_artifact, camera_placement, mode_profile
+    from tests.test_calibrated_projection import _capture_mode
+    from tests.test_camera_fusion_processing import _context_kwargs
+
+    root = write_session(tmp_path)
+    clip = session.find_clips(root)[0]
+    run = session.read_run(clip.run_dir)
+    profile = mode_profile()
+    profile["crop_readout_mapping"].update(
+        scaler_crop="not_applicable_raw_stream", driver_vertical_offset_px=174
+    )
+    artifact = calibration_artifact(profile)
+    model = build_calibrated_camera_model(
+        artifact, camera_placement(), observed_pitch_deg=7, observed_roll_deg=-3
+    )
+    metadata_path = clip.path / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    with np.load(clip.path / "frames.npz", allow_pickle=False) as archive:
+        count = len(archive["frames"])
+    mode = _capture_mode(model.projection.mode_profile)
+    for key, values in mode["frames"].items():
+        mode["frames"][key] = [values[0]] * count
+    metadata["capture_mode"] = mode
+    metadata_path.write_text(json.dumps(metadata))
+    geometry = _context_kwargs()["geometry"].with_calibrated_model(
+        model.snapshot,
+        {
+            "status": "unverified",
+            "reasons": ["calibration remains unqualified"],
+            "mode_profile_sha256": model.projection.mode_profile["sha256"],
+        },
+    )
+    shot = run.shots[1]
+    shot["camera_fusion_context"] = build_context(
+        **{
+            **_context_kwargs(),
+            "geometry": geometry,
+            "shot_number": 1,
+            "session_uuid": run.start["session_uuid"],
+            "capture_npz_sha256": shot["impact_range_evidence"]["camera_capture_sha256"],
+        }
+    )
+    job = {
+        "session_uuid": run.start["session_uuid"],
+        "shot_number": 1,
+        "clip_path": str(clip.path),
+        "shot": shot,
+        "start": run.start["config"],
+    }
+    reading = LiveAnalyser(analysis_max_width=320).analyse(job)
+    decision = reading["optics_input_decision"]
+    assert decision["applied"] and not decision["research_override"]
+    assert decision["depth_origin_source"] == "recorded_calibrated_placement"
+    assert decision["analysis_binning_factor"] == 2
+    assert reading["range_input_decision"]["accepted"]
+    assert reading["dynamic_lie"]["status"] == "not_measured"
+    assert (
+        reading["dynamic_lie"]["reason"]
+        == "rectified optics need a full-placement shaft-plane estimator"
+    )
+    context = shot["camera_fusion_context"]
+    context["capture_npz_sha256"] = "b" * 64
+    context.pop("sha256")
+    context["sha256"] = geometry_fingerprint(context)
+    refused = LiveAnalyser().analyse(job)
+    assert refused["status"] == "rejected"
+    assert "does not match" in refused["optics_input_decision"]["reason"]
+    assert not refused["optics_input_decision"]["applied"]
+    shot["calibrated_camera_status"] = "rejected"
+    shot["camera_fusion_context"] = {"available": False, "reason": "mode mismatch"}
+    refused = LiveAnalyser().analyse(job)
+    assert refused["status"] == "rejected"
+    assert (
+        refused["optics_input_decision"]["reason"]
+        == "declared calibrated camera was rejected upstream"
+    )
 
 
 def _rig_parameters() -> dict:
@@ -64,6 +162,8 @@ def write_session(
         frames=frames,
         pre_trigger_count=np.int32(11),
         exposure_us=np.full(len(frames), 300.0),
+        sensor_timestamp_ns=1_000_000_000
+        + np.arange(len(frames), dtype=np.int64) * round(1e9 / synthetic.FPS),
     )
     (clip / "metadata.json").write_text(
         json.dumps({"delivered_fps": synthetic.FPS, "settings": {"mirror_horizontal": False}}),
@@ -71,6 +171,7 @@ def write_session(
     )
     start = {
         "type": "session_start",
+        "session_uuid": "synthetic-session",
         "config": {
             "golfer": {"handed": handed, "source": "setup"},
             "rig_geometry": {
@@ -93,6 +194,8 @@ def write_session(
             "attack_angle": {"value": -2.0, "status": "measured"},
         },
     }
+    bind_test_angles(shot, clip / "frames.npz")
+    bind_test_range(shot, clip / "frames.npz", "synthetic-session")
     events = [
         start,
         {"type": "camera_capture", "shot_number": 1, "capture_path": f"/srv/sessions/{CLIP}"},
@@ -158,7 +261,7 @@ def test_the_cli_reads_both_axes_from_a_recorded_session(tmp_path):
     assert row["ball_range_mm"] == pytest.approx(synthetic.BALL_RANGE_MM, abs=1.0)
     assert row["face_centre_height_source"] == "face_photo_marks_n3"
     assert row["face_centre_from_toe_source"] == "reference_geometry_face_centre_rule"
-    assert row["dynamic_loft_source"] == "shot_metric_calculated"
+    assert row["dynamic_loft_source"] == "synthetic_independent_angle"
     assert row["face_photo"] == "face-photos/shot-0001.pgm"
     assert row["impact_offset_mm"] == pytest.approx(8.0, abs=2.5)
     assert row["impact_height_mm"] == pytest.approx(synthetic.height_truth(0.0, 0.0), abs=2.5)
@@ -206,14 +309,16 @@ def test_a_camera_range_prior_is_never_used_and_the_refusal_is_named(tmp_path):
     assert row["label"] == "experimental_unqualified"
 
 
-def test_range_sources_in_order():
+def test_unbound_range_sources_are_refused_and_explicit_research_override_remains():
     run = session.RunRecord(
         {}, {}, {}, {}, {"selected_range_m": 1.6, "selected_uncertainty_m": 0.05}
     )
-    assert session.shot_range_m({"ball_range_m": 1.5, "ball_range_source": "iwr"}, run, None)[
-        2
-    ] == ("shot_iwr")
-    assert session.shot_range_m({}, run, None) == (1.6, 0.05, "run_tee_range_selected")
+    assert session.shot_range_m({"ball_range_m": 1.5, "ball_range_source": "iwr"}, run, None) == (
+        None,
+        None,
+        "none",
+    )
+    assert session.shot_range_m({}, run, None) == (None, None, "none")
     empty = session.RunRecord({}, {}, {}, {}, None)
     assert session.shot_range_m({}, empty, 2.0) == (2.0, None, "command_line")
     assert session.shot_range_m({}, empty, None) == (None, None, "none")
