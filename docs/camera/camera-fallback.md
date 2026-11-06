@@ -44,6 +44,10 @@ length or the lens's listed one (+-8 %). On Harjot-outdoor-test-1 the 28 shots w
 resting ball measured 41.2-45.3 px, 1.92-2.12 m at the 6 mm lens's listed 2000 px; shot
 14's IWR launch point was 1.91 +- 0.12 m.
 
+The recorded position starts the first outline fit. A qualified fit supplies the start
+for the remaining windows; a failed fit falls back to the existing scene search. The
+seed alone never confirms a ball. Outline, size and window-outlier gates are unchanged.
+
 Before IWR pose fitting, the kiosk compares the saved ball reference with this clip's
 cached outline fit. A centre displacement beyond `max(8 px, 0.75 reference diameters)`
 or an observed/reference diameter ratio outside `0.75..1.33` rejects the camera range

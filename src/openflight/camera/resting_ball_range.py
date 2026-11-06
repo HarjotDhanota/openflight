@@ -25,7 +25,7 @@ from ..constants import BALL_DIAMETER_M
 from ..source_labels import LABEL_EXPERIMENTAL
 from . import ball_pixels
 from .ball_launch_fallback import PinholeCamera, resting_ball_pitch_deg
-from .club_motion import detect_reference_ball, measure_resting_ball
+from .club_motion import ReferenceBall, detect_reference_ball, measure_resting_ball
 
 SOURCE = "camera_ball_size"
 LABEL = LABEL_EXPERIMENTAL
@@ -93,15 +93,20 @@ def measure_resting_ball_size(
     )
     if region[0] >= region[2] or region[1] >= region[3]:
         return None
-    try:
-        found = detect_reference_ball(
-            before, pixel_scale=ball_pixels.pixel_scale(width), roi=region
-        )
-    except (RuntimeError, ValueError):
-        return None
     low, high = (ratio * seed_d for ratio in SEED_SIZE_RATIO)
-    # the fit starts from the detector's own size when it is plausible, else the seed's
-    start_d = found.diameter_px if low <= found.diameter_px <= high else seed_d
+    found = ReferenceBall(x=seed_x, y=seed_y, diameter_px=seed_d, area_px=0)
+    first_measure = measure_resting_ball(before[:WINDOW_FRAMES], found, seed_d)
+    if first_measure is None:
+        try:
+            found = detect_reference_ball(
+                before, pixel_scale=ball_pixels.pixel_scale(width), roi=region
+            )
+        except (RuntimeError, ValueError):
+            return None
+        start_d = found.diameter_px if low <= found.diameter_px <= high else seed_d
+    else:
+        found = first_measure
+        start_d = first_measure.diameter_px
     sizes, centres = [], []
     starts = range(0, max(1, len(before) - WINDOW_FRAMES + 1), WINDOW_FRAMES)
     step = max(1, math.ceil(len(starts) / MAX_WINDOWS))
@@ -109,7 +114,11 @@ def measure_resting_ball_size(
         window = before[start : start + WINDOW_FRAMES]
         if len(window) < 3:
             continue
-        measured = measure_resting_ball(window, found, start_d)
+        measured = (
+            first_measure
+            if start == 0 and first_measure is not None
+            else measure_resting_ball(window, found, start_d)
+        )
         if measured is not None:
             sizes.append(measured.diameter_px)
             centres.append((measured.x, measured.y))
