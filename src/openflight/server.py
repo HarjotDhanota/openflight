@@ -1720,10 +1720,13 @@ def ball_at_address_look(monitor, runtime, *, now: float, locate=None) -> dict |
     if monitor is None or runtime is None:
         return None
     try:
-        status = runtime.status()
+        status = runtime.ready_snapshot()
     except Exception:  # pylint: disable=broad-exception-caught
         return None
-    if status.get("collecting_tail") or status.get("saving") or status.get("pending_saves"):
+    if any(
+        status.get(key)
+        for key in ("collecting_tail", "awaiting_handoff", "saving", "pending_saves")
+    ):
         return None
     frames = runtime.recent_frames(1, timeout_s=0.5)
     if not frames:

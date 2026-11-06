@@ -12,6 +12,8 @@ import pytest
 
 from openflight import server
 from openflight.camera import ball_at_address
+from openflight.camera.capture_runtime import CameraCaptureRuntime, CameraCaptureSettings
+from openflight.camera.triggered_buffer import CameraFrame
 from openflight.iwr6843.calibration import Calibration
 from openflight.iwr6843.runtime import IWR6843Runtime
 from tests.test_ball_at_address import BOX, SETUP, _scene
@@ -148,7 +150,7 @@ def test_the_monitor_looks_at_the_camera_s_latest_frame_only_when_idle(kiosk_sta
         def __init__(self, busy):
             self.busy = busy
 
-        def status(self):
+        def ready_snapshot(self):
             return {"collecting_tail": self.busy, "saving": False, "pending_saves": 0}
 
         def recent_frames(self, count, timeout_s=2.0):
@@ -158,6 +160,78 @@ def test_the_monitor_looks_at_the_camera_s_latest_frame_only_when_idle(kiosk_sta
     look = server.ball_at_address_look(monitor, Runtime(busy=False), now=2.0)
     assert look["state"] == "in_box"
     assert isinstance(Frame.image, np.ndarray)
+
+
+@pytest.mark.parametrize(
+    "phase", ["collecting_tail", "awaiting_handoff", "saving", "pending_saves"]
+)
+def test_address_search_skips_real_runtime_clip_states(kiosk_state, tmp_path, phase):
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path / "camera",
+        settings=CameraCaptureSettings(fps=100, pre_ms=10, post_ms=10),
+        use_gpio_trigger=False,
+        vertical_offset_path=tmp_path / "private-offset",
+    )
+    runtime._running = True
+    frame = CameraFrame(np.zeros((400, 640), np.uint8), 1, 1, 300, 4.0)
+    runtime._ring.add_frame(frame)
+    if phase in {"collecting_tail", "awaiting_handoff"}:
+        assert runtime._ring.trigger(1)
+        if phase == "awaiting_handoff":
+            runtime._ring.add_frame(CameraFrame(frame.image, 2, 2, 300, 4.0))
+    elif phase == "saving":
+        runtime._saving_since = 1.0
+    else:
+        runtime._ready.put(object())
+    assert runtime.ready_snapshot()[phase]
+    assert phase not in runtime.status()
+    monitor = ball_at_address.BallAtAddress(box_px=BOX, setup_ball=SETUP, setup_range_m=2.2)
+
+    def forbidden_search(*_args, **_kwargs):
+        pytest.fail(f"address search ran while the camera was {phase}")
+
+    assert server.ball_at_address_look(monitor, runtime, now=2.0, locate=forbidden_search) is None
+    assert monitor.latest() is None
+
+
+def test_address_search_uses_idle_real_runtime_frames(kiosk_state, tmp_path):
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path / "camera",
+        use_gpio_trigger=False,
+        vertical_offset_path=tmp_path / "private-offset",
+    )
+    runtime._running = True
+    frame = CameraFrame(np.zeros((400, 640), np.uint8), 1, server.time.monotonic_ns(), 300, 4.0)
+    runtime._ring.add_frame(frame)
+    monitor = ball_at_address.BallAtAddress(
+        box_px=(0, 0, 640, 400), setup_ball=None, setup_range_m=None
+    )
+
+    def search(*_args):
+        return {"in_box": [320.0, 200.0, 20.0], "outside": None}
+
+    look = server.ball_at_address_look(monitor, runtime, now=server.time.time(), locate=search)
+
+    assert look["state"] == "in_box"
+    assert look["frame_id"] == frame.host_timestamp_ns
+    assert look["frame_metadata"]["sensor_timestamp_ns"] == frame.sensor_timestamp_ns
+
+
+def test_address_search_skips_failed_snapshot_without_status_fallback(kiosk_state):
+    class Runtime:
+        def ready_snapshot(self):
+            raise RuntimeError("camera state unavailable")
+
+        def status(self):
+            pytest.fail("operator status is not the capture ownership snapshot")
+
+        def recent_frames(self, *_args, **_kwargs):
+            pytest.fail("address search read frames without a snapshot")
+
+    monitor = ball_at_address.BallAtAddress(box_px=BOX, setup_ball=SETUP, setup_range_m=2.2)
+
+    assert server.ball_at_address_look(monitor, Runtime(), now=2.0) is None
+    assert monitor.latest() is None
 
 
 class _Started(Exception):
@@ -278,7 +352,7 @@ def test_a_look_whose_worker_failed_is_skipped_and_logged(kiosk_state, caplog):
         image = _scene([(641.0, 451.0, 20.0)])
 
     class Runtime:
-        def status(self):
+        def ready_snapshot(self):
             return {"collecting_tail": False, "saving": False, "pending_saves": 0}
 
         def recent_frames(self, count, timeout_s=2.0):
