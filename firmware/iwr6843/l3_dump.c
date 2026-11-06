@@ -3564,7 +3564,7 @@ static void l3_considerBall(uint32_t slot)
 
     if (gBall.state == L3_BALL_STATE_OFF || gCapturePlan.loops == 0U ||
         gBallCfg.framesPerUpdate == 0U ||
-        (gPreFramesCaptured % gBallCfg.framesPerUpdate) != 0U) {
+        (gDetectRingEpoch % gBallCfg.framesPerUpdate) != 0U) {
         return;
     }
     if (count > L3_BALL_MAX_BINS) {
