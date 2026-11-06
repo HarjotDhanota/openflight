@@ -15,6 +15,7 @@ from joint_clock_active import (
 from usb_collector import ExchangeError
 
 from openflight.camera import iwr_capture_plan
+from openflight.camera.sync_resume import pristine_stats
 
 # The reviewed image queues this line the moment it latches (l3_dump.c "Triggered").
 NOTICE = b"Triggered\n"
@@ -78,6 +79,50 @@ class ShotCollector(ActiveCollector):
         self.identity(initial=True)
         self.idle()
         self.fresh_runtime = True
+
+    def attach_zero_attempt_runtime(self, expected_runtime):
+        """Use only after authenticating the original never-started-RF journal."""
+        if self.context is not None or self.generation or self.fresh_runtime or self.failed:
+            raise ValueError("zero-attempt attachment requires a new collector")
+        original_nonce = self.nonce
+
+        def distinct_nonce():
+            token = original_nonce()
+            if token == expected_runtime:
+                raise ValueError("resume request must not re-seed the prior runtime after a reset")
+            return token
+
+        self.nonce = distinct_nonce
+
+        def pristine():
+            raw, _ = self.exchange("stats")
+            return pristine_stats(raw)
+
+        try:
+            self.identity(initial=False)
+            if self.context.boot != expected_runtime or self.context.frame_seq != 0:
+                raise ValueError("existing runtime differs or RF frames have occurred")
+            before = pristine()
+            raw, _ = self.exchange("triggerLog result", done_count=2)
+            result = fields_for(raw, "result ", ("shot", "ready"))
+            if result["ready"] != "0" or result["shot"] != "0":
+                raise ValueError("held or previous result present; resume cannot discard it")
+            self.identity()
+            if self.context.frame_seq != 0:
+                raise ValueError("RF frames occurred during resume verification")
+            after = pristine()
+            self.fresh_runtime = True
+            return {
+                "before": before,
+                "after": after,
+                "reused_clock_mapping": False,
+                "read_only": True,
+            }
+        except BaseException:
+            self.failed = True
+            raise
+        finally:
+            self.nonce = original_nonce
 
     def exchange(self, *args, **kwargs):
         """An interrupted reply must never be followed by speculative cleanup writes."""
