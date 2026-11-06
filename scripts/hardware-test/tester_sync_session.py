@@ -567,11 +567,12 @@ def main():
         raise InterruptedError("tester stopped session")
 
     signal.signal(signal.SIGTERM, stop)
+    options = {"resume": True} if args.resume_zero_attempt else {}
     run(
         args.clock_package.resolve(),
         args.output,
         capture_plan=args.iwr_capture_plan,
-        resume=args.resume_zero_attempt,
+        **options,
     )
 
 

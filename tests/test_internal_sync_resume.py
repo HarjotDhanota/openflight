@@ -5,6 +5,7 @@ import hashlib
 import importlib
 import json
 import shutil
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -487,3 +488,34 @@ def test_worker_revalidates_linked_evidence_before_any_ownership_or_uart_action(
         tools.run(package, output, resume=True)
     assert not events
     assert json.loads((output / "status.json").read_text())["phase"] == "failed"
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_cli_adds_resume_dispatch_only_when_explicitly_requested(
+    tmp_path, monkeypatch, collector_type, resume
+):
+    tools = importlib.import_module("tester_sync_session")
+    calls = []
+    monkeypatch.setattr(tools, "load_package", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tools, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
+    monkeypatch.setattr(tools.signal, "signal", lambda *_args: None)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "tester_sync_session.py",
+            "--clock-package",
+            str(tmp_path),
+            "--output",
+            str(tmp_path / "new"),
+            "--execute",
+            *(["--resume-zero-attempt"] if resume else []),
+        ],
+    )
+    tools.main()
+    assert calls == [
+        (
+            (tmp_path.resolve(), tmp_path / "new"),
+            {"capture_plan": "default", **({"resume": True} if resume else {})},
+        )
+    ]
