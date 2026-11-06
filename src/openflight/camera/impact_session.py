@@ -9,10 +9,10 @@ result is labelled ``experimental_unqualified`` and every refusal names its reas
 
 Per-shot inputs, each with its source:
 
-- the ball's range: the shot's own IWR range (``ball_range_m``, never a camera
-  prior), else the run's selected tee range, else the session's tee-range
-  handoff, else ``range_m`` from the caller; the IWR slant range becomes the
-  ball's depth through the rig's IWR offset and the resting ball's ray;
+- the ball's range: versioned own-shot IWR evidence bound to this camera capture;
+  run/session scalars and camera priors cannot supply it. An explicit caller
+  ``range_m`` remains an unqualified research override. IWR slant range becomes
+  ball depth through the rig's IWR offset and the resting ball's ray;
 - the resting ball: the caller's, else the detector at the size that range
   implies, else the ladder's recorded ball;
 - club speed (OPS), dynamic loft, face angle and attack from the shot record's
@@ -29,6 +29,7 @@ Per-shot inputs, each with its source:
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import math
 import zipfile
@@ -40,16 +41,11 @@ import numpy as np
 
 from openflight.ballistics import MPH_TO_MPS
 from openflight.camera import impact_location as il
+from openflight.camera.impact_angle_evidence import ANGLE_SIGMA_BY_STATUS, AngleEvidence
 
 SCHEMA = "openflight.impact_location.v2"
 ANCHOR_SCHEMA = "openflight.face_centre_anchors.v1"
 RESTING_FRAMES = 10
-ANGLE_SIGMA_BY_STATUS = {
-    "measured": 2.0,
-    "calculated": 3.0,
-    "model_geometry": 5.0,
-    "estimated": 6.0,
-}
 CSV_FIELDS = (
     "shot_id",
     "run",
@@ -319,33 +315,33 @@ def ball_depth_mm(
 
 
 def shot_range_m(
-    shot: Mapping[str, Any], run: RunRecord, given_m: float | None
+    shot: Mapping[str, Any],
+    run: RunRecord,
+    given_m: float | None,
+    *,
+    capture_npz_sha256: str | None = None,
+    decision: dict[str, Any] | None = None,
 ) -> tuple[float | None, float | None, str]:
-    """(IWR slant range m, its sigma m, source) for one shot, in the documented order."""
-    value = _number(shot.get("ball_range_m"))
-    source = str(shot.get("ball_range_source") or "")
-    if value and not source.startswith("camera"):
-        return value, _number(shot.get("ball_range_uncertainty_m")), f"shot_{source or 'iwr'}"
-    selected = _number((run.tee_range or {}).get("selected_range_m"))
-    if selected:
-        sigma = _number((run.tee_range or {}).get("selected_uncertainty_m"))
-        return selected, sigma, "run_tee_range_selected"
-    config = run.start.get("config") or {}
-    handoff = config.get("tee_range_handoff") or {}
-    for key in ("tee_slant_range_m", "range_m"):
-        value = _number(handoff.get(key)) if isinstance(handoff, dict) else None
-        if value and "camera" not in str(handoff.get("source", "")):
-            return value, None, f"session_tee_range_handoff_{handoff.get('source', 'unknown')}"
-    if given_m:
-        return float(given_m), None, "command_line"
+    """Own-shot bound range, or an explicitly supplied unqualified research override."""
+    from openflight.camera.impact_range_evidence import read_shot_range  # noqa: PLC0415
+
+    try:
+        value, sigma, evidence = read_shot_range(
+            shot, session_uuid=run.start.get("session_uuid"), capture_sha256=capture_npz_sha256
+        )
+    except (ValueError, TypeError, KeyError, OverflowError) as exc:
+        if decision is not None:
+            decision.update(accepted=False, reason=str(exc), physical_qualified=False)
+    else:
+        if decision is not None:
+            decision.update(accepted=True, reason=None, evidence=evidence, physical_qualified=False)
+        return value, sigma, f"shot_{evidence['selected']['ball_range_source']}"
+    override = _number(given_m)
+    if override is not None and override > 0:
+        if decision is not None:
+            decision.update(research_override=True, source="command_line")
+        return override, None, "command_line"
     return None, None, "none"
-
-
-def _metric(shot: Mapping[str, Any], name: str) -> tuple[float | None, str | None, str | None]:
-    entry = (shot.get("metrics") or {}).get(name)
-    if not isinstance(entry, dict):
-        return None, None, None
-    return _number(entry.get("value")), entry.get("status"), entry.get("frame")
 
 
 def shot_face_inputs(
@@ -356,32 +352,67 @@ def shot_face_inputs(
     *,
     lens_height_mm: float | None,
     anchors: Mapping[str, il.Labelled] | None = None,
+    capture_npz_sha256: str | None = None,
+    capture_sensor_interval_ns: tuple[int, int] | None = None,
+    decisions: dict[str, Any] | None = None,
 ) -> il.FaceInputs:
-    """The shot's labelled loft, face and attack over the club's priors."""
+    """Use explicitly unconditioned, capture-bound angles; retain priors otherwise."""
     face = il.FaceInputs.priors(club, lens_height_mm=lens_height_mm)
     changes: dict[str, il.Labelled] = {}
-    loft, status, _frame = _metric(shot, "dynamic_loft")
-    if loft is not None and status in ANGLE_SIGMA_BY_STATUS:
-        changes["dynamic_loft"] = il.Labelled(
-            loft, ANGLE_SIGMA_BY_STATUS[status], f"shot_metric_{status}"
-        )
-    attack, status, _frame = _metric(shot, "attack_angle")
-    if attack is not None and status in ANGLE_SIGMA_BY_STATUS:
-        changes["attack_angle"] = il.Labelled(
-            attack, ANGLE_SIGMA_BY_STATUS[status], f"shot_metric_{status}"
-        )
-    angle, status, frame = _metric(shot, "face_angle")
-    if angle is not None and status in ANGLE_SIGMA_BY_STATUS:
-        offset = _number(
-            ((start.get("config") or {}).get("target_line") or {}).get("horizontal_offset_deg")
-        )
-        sigma = ANGLE_SIGMA_BY_STATUS[status]
-        if frame == "target_line" and offset is not None:
-            angle -= offset
-        elif frame not in (None, "unit_boresight"):
-            sigma += 2.0
-        right_is_open = angle if handedness == "right" else -angle
-        changes["face_angle"] = il.Labelled(right_is_open, sigma, f"shot_metric_{status}")
+    metrics = shot.get("metrics")
+    metrics = metrics if isinstance(metrics, Mapping) else {}
+    for name in ("dynamic_loft", "attack_angle", "face_angle"):
+        entry = metrics.get(name)
+        reason = "angle_not_recorded"
+        evidence = None
+        if isinstance(entry, Mapping):
+            reason = "angle_status_not_eligible"
+            if isinstance(entry.get("status"), str) and entry["status"] in ANGLE_SIGMA_BY_STATUS:
+                try:
+                    evidence = AngleEvidence.from_metric(
+                        name,
+                        entry,
+                        shot_number=shot.get("shot_number"),
+                        capture_npz_sha256=capture_npz_sha256,
+                        capture_sensor_interval_ns=capture_sensor_interval_ns,
+                    )
+                except ValueError as exc:
+                    reason = str(exc)
+        if evidence is not None:
+            value = evidence.value_deg
+            if name == "face_angle":
+                offset = _number(
+                    ((start.get("config") or {}).get("target_line") or {}).get(
+                        "horizontal_offset_deg"
+                    )
+                )
+                if evidence.frame == "target_line" and offset is None:
+                    evidence, reason = None, "target_line_transform_unknown"
+                else:
+                    value -= offset if evidence.frame == "target_line" else 0.0
+                    value = value if handedness == "right" else -value
+            if evidence is not None:
+                changes[name] = il.Labelled(
+                    value,
+                    max(ANGLE_SIGMA_BY_STATUS[evidence.status], evidence.sigma_deg),
+                    evidence.source,
+                    evidence,
+                )
+        if decisions is not None:
+            decisions[name] = {
+                "accepted": name in changes,
+                "reason": None if name in changes else reason,
+                "producer": None
+                if not isinstance(entry, Mapping)
+                else {
+                    "value": _number(entry.get("value")),
+                    **{
+                        key: entry.get(key) if isinstance(entry.get(key), str) else None
+                        for key in ("source", "status", "unit", "frame", "note")
+                    },
+                },
+                "evidence": evidence.as_dict() if evidence is not None else None,
+            }
     anchor = (anchors or {}).get(club)
     if anchor is not None:
         changes["face_centre_height"] = anchor
@@ -438,28 +469,47 @@ def bin_frames(frames: np.ndarray, factor: int) -> np.ndarray:
 
 
 def _load_frames(clip: Clip) -> tuple[np.ndarray | None, dict[str, Any]]:
+    clip.extra.pop("capture_npz_sha256", None)
+    clip.extra.pop("capture_sensor_interval_ns", None)
     try:
         metadata = json.loads((clip.path / "metadata.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         metadata = {}
     try:
-        with np.load(clip.path / "frames.npz") as data:
-            frames = np.asarray(data["frames"], dtype=np.uint8)
-            if "pre_trigger_count" in data.files:
-                clip.trigger_index = int(data["pre_trigger_count"])
-            if "exposure_us" in data.files:
-                clip.exposure_us = float(np.median(data["exposure_us"]))
-            stamps = (
-                np.asarray(data["sensor_timestamp_ns"])
-                if "sensor_timestamp_ns" in data.files
-                else None
-            )
+        raw_path = clip.path / "frames.npz"
+        hasher = hashlib.sha256()
+        with raw_path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                hasher.update(chunk)
+            clip.extra["capture_npz_sha256"] = hasher.hexdigest()
+            handle.seek(0)
+            with np.load(handle, allow_pickle=False) as data:
+                frames = np.asarray(data["frames"], dtype=np.uint8)
+                if "pre_trigger_count" in data.files:
+                    clip.trigger_index = int(data["pre_trigger_count"])
+                if "exposure_us" in data.files:
+                    clip.exposure_us = float(np.median(data["exposure_us"]))
+                stamps = (
+                    np.asarray(data["sensor_timestamp_ns"])
+                    if "sensor_timestamp_ns" in data.files
+                    else None
+                )
     except (OSError, ValueError, KeyError) as exc:
         clip.error = f"unreadable_frames_npz: {exc}"
         return None, metadata
     if frames.ndim != 3:
         clip.error = "frames_npz_is_not_a_clip"
         return None, metadata
+    if (
+        stamps is not None
+        and stamps.ndim == 1
+        and len(stamps) == len(frames)
+        and stamps.dtype.kind in "iu"
+        and len(stamps) > 0
+        and int(stamps[0]) > 0
+        and np.all(np.diff(stamps.astype(object)) > 0)
+    ):
+        clip.extra["capture_sensor_interval_ns"] = (int(stamps[0]), int(stamps[-1]))
     fps = _number(metadata.get("delivered_fps")) or 0.0
     if fps <= 0.0 and stamps is not None and stamps.size > 2:
         interval = float(np.median(np.diff(stamps.astype(np.float64))))
@@ -538,7 +588,13 @@ def prepare_clip(  # pylint: disable=too-many-locals
     focal, focal_source = focal_px(run.start, rig, int(width), lens_id=options.lens_id)
     camera = il.ImpactCamera(focal, ((width - 1) / 2.0, (height - 1) / 2.0), focal_source)
     clip.extra["rig_source"] = rig_source
-    range_m, sigma_m, clip.range_source = shot_range_m(shot, run, options.range_m)
+    range_m, sigma_m, clip.range_source = shot_range_m(
+        shot,
+        run,
+        options.range_m,
+        capture_npz_sha256=clip.extra.get("capture_npz_sha256"),
+        decision=clip.extra.setdefault("range_input_decision", {}),
+    )
     if options.ball is not None:
         clip.ball, clip.ball_source = il.RestingBall(*options.ball), "command_line"
     else:
@@ -556,6 +612,9 @@ def prepare_clip(  # pylint: disable=too-many-locals
         run.start,
         lens_height_mm=lens_height,
         anchors=options.anchors,
+        capture_npz_sha256=clip.extra.get("capture_npz_sha256"),
+        capture_sensor_interval_ns=clip.extra.get("capture_sensor_interval_ns"),
+        decisions=clip.extra.setdefault("angle_input_decisions", {}),
     )
     clip.prepared = il.prepare_shot(
         frames,
@@ -608,6 +667,8 @@ def result_row(
         "face_photo": clip.face_photo,
         "relative_path": clip.relative_path,
         "dynamic_lie": clip.extra.get("dynamic_lie"),
+        "angle_input_decisions": clip.extra.get("angle_input_decisions", {}),
+        "range_input_decision": clip.extra.get("range_input_decision", {}),
     }
     if location is None:
         reason = clip.error or "not_analysed"

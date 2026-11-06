@@ -103,6 +103,7 @@ import cv2
 import numpy as np
 from scipy import ndimage, signal
 
+from openflight.camera.impact_angle_evidence import AngleEvidence
 from openflight.constants import BALL_DIAMETER_MM
 
 EXPERIMENTAL_LABEL = "experimental_unqualified"
@@ -256,10 +257,18 @@ class Labelled:
     value: float
     sigma: float
     source: str
+    evidence: AngleEvidence | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-ready fields."""
-        return {"value": round(self.value, 4), "sigma": round(self.sigma, 4), "source": self.source}
+        record = {
+            "value": round(self.value, 4),
+            "sigma": round(self.sigma, 4),
+            "source": self.source,
+        }
+        if self.evidence is not None:
+            record["evidence"] = self.evidence.as_dict()
+        return record
 
 
 REFERENCE_FACE_CENTRE = "reference_geometry_face_centre_rule"
