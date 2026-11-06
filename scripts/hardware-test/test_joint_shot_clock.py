@@ -15,7 +15,7 @@ import pytest
 from run_joint_clock import load_package
 
 load_package(Path(os.environ["OPENFLIGHT_CLOCK_PACKAGE"]))
-from joint_clock_active import CONFIGURATION  # noqa: E402
+from joint_clock_active import CONFIGURATION, fields_for  # noqa: E402
 from joint_shot_clock import (  # noqa: E402
     PROFILE,
     TRIGGER_COMMANDS,
@@ -56,6 +56,15 @@ class ShotPort(WIRE.Port):
 
     def write(self, data):
         command = data.decode().strip()
+        if command == "ball status":
+            assert not self.pending
+            self.writes.append(data)
+            self.pending = (
+                f"ball state={self.ball_state} follow=1 bin={self.ball_bin} reason={self.ball_reason}\n"
+                "balldbg centroid=51.00 width=1 persistence=0.75 reject=none\n"
+                "ballangle valid=0\nDone\nDone\nl3dump:/>"
+            ).encode()
+            return len(data)
         if command == "l3dump":
             assert not self.pending
             self.writes.append(data)
@@ -120,6 +129,155 @@ def wire(chunk=65536, **plan):
     port.double = collector.DOUBLE_COMPLETION_COMMANDS
     collector.establish_fresh_runtime()
     return collector, port
+
+
+@pytest.mark.parametrize("chunk", [1, 65536])
+def test_ball_status_retains_real_framing_and_preceding_non_atomic_stats(chunk):
+    collector, port = wire(chunk)
+    collector.begin()
+    observed = []
+    index, state_seen = collector.wait_ball(
+        lambda _phase, state: observed.append(state), lambda: False
+    )
+    rows = [row for row in collector.rows if row["command"] == "ball status"]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["expected_completions"] == 2 and not row["error"]
+    assert b"balldbg centroid=51.00" in base64.b64decode(row["received_b64"])
+    context = row["ball_status_context"]
+    stats = collector.rows[context["preceding_stats_exchange_index"]]
+    assert stats["command"] == "stats" and stats["after_ns"] <= row["before_ns"]
+    assert context["preceding_stats_state"] == state_seen == observed[-1]
+    assert context["non_atomic"] is True and context["physical_timing_qualified"] is False
+    assert index == 51 and not port.pending
+    before_arm = len(port.writes)
+    collector.arm(index)
+    assert port.writes[before_arm : before_arm + 2] == [b"stats\n", b"triggerCfg 51 1 1\n"]
+
+
+@pytest.mark.parametrize("partial", ["one_completion", "timeout"])
+def test_partial_ball_status_poisoning_retains_annotated_reply_without_cleanup(
+    monkeypatch, partial
+):
+    collector, port = wire()
+    collector.begin()
+    original = port.write
+
+    def broken_status(data):
+        count = original(data)
+        if data == b"ball status\n":
+            port.pending = (
+                port.pending.replace(b"Done\nDone\n", b"Done\n")
+                if partial == "one_completion"
+                else b"balldbg incomplete"
+            )
+        return count
+
+    monkeypatch.setattr(port, "write", broken_status)
+    with pytest.raises(ExchangeError):
+        collector.wait_ball(lambda *_: None, lambda: False)
+    row = collector.rows[-1]
+    assert row["command"] == "ball status" and row["error"]
+    assert row["ball_status_context"]["preceding_stats_state"]["ball"]["state"] == "locked"
+    assert base64.b64decode(row["received_b64"])
+    assert collector.failed and collector.observed_ball is None
+    writes = list(port.writes)
+    collector.finish()
+    assert port.writes == writes
+
+
+def test_ball_status_changes_are_capped_but_fresh_arm_check_and_next_begin_remain():
+    collector, port = wire()
+    collector.begin()
+    port.ball_state = "waiting"
+    collector.deadline_ns = collector.now() + 3_000_000_000
+
+    def changing(_phase, _snapshot):
+        port.ball_reason = "none" if port.ball_reason == "no_delta" else "no_delta"
+
+    with pytest.raises(TimeoutError):
+        collector.wait_ball(changing, lambda: False)
+    assert port.writes.count(b"ball status\n") == 16
+    port.ball_state, port.ball_reason = "locked", "none"
+    collector.deadline_ns = collector.now() + 500_000_000
+    index, _ = collector.wait_ball(lambda *_: None, lambda: False)
+    assert port.writes.count(b"ball status\n") == 16
+    port.ball_locks, port.ball_releases = 2, 1
+    with pytest.raises(CandidateUnavailable):
+        collector.arm(index)
+    assert b"triggerCfg 51 1 1\n" not in port.writes
+    collector.finish()
+    collector.begin()
+    collector.wait_ball(lambda *_: None, lambda: False)
+    assert port.writes.count(b"ball status\n") == 17
+
+
+def test_unchanged_ball_state_does_not_repeat_status_reads():
+    collector, port = wire()
+    collector.begin()
+    port.ball_state = "waiting"
+    collector.deadline_ns = collector.now() + 500_000_000
+    with pytest.raises(TimeoutError):
+        collector.wait_ball(lambda *_: None, lambda: False)
+    assert port.writes.count(b"ball status\n") == 1
+    assert port.writes.count(b"stats\n") > 1
+
+
+def test_stop_after_stats_prevents_diagnostic_and_candidate_acceptance():
+    collector, port = wire()
+    collector.begin()
+    stopped = False
+
+    def stop(_phase, _state):
+        nonlocal stopped
+        stopped = True
+
+    with pytest.raises(InterruptedError):
+        collector.wait_ball(stop, lambda: stopped)
+    assert b"ball status\n" not in port.writes
+    assert collector.observed_ball is None and not collector.failed
+
+
+def test_diagnostic_never_reads_enabled_trigger_or_armed_result():
+    collector, port = wire()
+    collector.begin()
+    index, _ = collector.wait_ball(lambda *_: None, lambda: False)
+    assert port.writes.count(b"ball status\n") == 1
+    collector.arm(index)
+    port.active, port.held = False, True
+    assert collector.wait_result(lambda *_: None, lambda: False)["record"]["shot_id"] == 1
+    assert port.writes.count(b"ball status\n") == 1
+    collector.finish()
+    collector.begin()
+    port.enabled = True
+    collector.wait_ball(lambda *_: None, lambda: False)
+    assert port.writes.count(b"ball status\n") == 1
+
+
+def test_candidate_change_during_diagnostic_still_refused_by_fresh_arm(monkeypatch):
+    collector, port = wire()
+    collector.begin()
+    original = port.write
+
+    def lost_during_status(data):
+        count = original(data)
+        if data == b"ball status\n":
+            port.ball_state, port.ball_reason = "waiting", "gone"
+        return count
+
+    monkeypatch.setattr(port, "write", lost_during_status)
+    index, _ = collector.wait_ball(lambda *_: None, lambda: False)
+    with pytest.raises(CandidateUnavailable):
+        collector.arm(index)
+    assert port.writes.count(b"ball status\n") == 1
+    assert b"triggerCfg 51 1 1\n" not in port.writes
+
+
+def test_ball_scan_stays_outside_bounded_command_scope():
+    collector, port = wire()
+    with pytest.raises(ValueError, match="outside bounded"):
+        collector.command("ball scan 20 53")
+    assert b"ball scan 20 53\n" not in port.writes and not collector.failed
 
 
 @pytest.mark.parametrize(
@@ -295,6 +453,7 @@ def test_post_enable_candidate_loss_waits_quietly_then_stops_and_keeps_evidence(
         tools, "camera_evidence", lambda *_a, **_k: {"status": "missing_or_ambiguous", "clips": []}
     )
     files = tools.SessionFiles(tmp_path / "session")
+    first_exchange = len(collector.rows)
     result = tools.attempt(
         collector,
         files,
@@ -315,6 +474,26 @@ def test_post_enable_candidate_loss_waits_quietly_then_stops_and_keeps_evidence(
     assert "do not swing" in files.state["message"]
     assert (files.folder / "attempt-001/RESULT.json").is_file()
     assert files.state["attempts"][0]["status"] == "partial"
+    saved = json.loads((files.folder / "attempt-001/RESULT.json").read_text())
+    exchanges = dict(enumerate(saved["iwr_exchanges"], start=first_exchange))
+    diagnostics = [row for row in exchanges.values() if row["command"] == "ball status"]
+    assert len(diagnostics) == 1
+    assert b"balldbg centroid=" in base64.b64decode(diagnostics[0]["received_b64"])
+    context = diagnostics[0]["ball_status_context"]
+    assert exchanges[context["preceding_stats_exchange_index"]]["command"] == "stats"
+    assert context["non_atomic"] is True
+    for observation in rows:
+        exchange = exchanges[observation["exchange_index"]]
+        assert exchange["command"] == "stats"
+        raw = base64.b64decode(exchange["received_b64"])
+        for group, prefix in (
+            ("capture", "frames="),
+            ("trigger", "trig phase="),
+            ("ball", "ball state="),
+        ):
+            assert (
+                fields_for(raw, prefix, observation["state"][group]) == observation["state"][group]
+            )
 
 
 def test_waiting_ball_cannot_remain_published_as_armed_before_any_latch(monkeypatch):
@@ -639,7 +818,13 @@ def fake():
     collector.observed_ball = None
     collector.state = {"rf_start_attempted": False, "stop_verified": False}
     collector.commands = []
-    collector.command = collector.commands.append
+    collector.rows = []
+
+    def command(value):
+        collector.commands.append(value)
+        collector.rows.append({"command": value})
+
+    collector.command = command
     collector.now = lambda: 1_000_000_000
     collector.sleep = lambda _: None
     return collector

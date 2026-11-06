@@ -39,7 +39,7 @@ def trigger_commands(plan=iwr_capture_plan.DEFAULT):
 def lifecycle_commands(plan=iwr_capture_plan.DEFAULT):
     """Every line the collector may send under the plan, and those completing twice."""
     triggers = trigger_commands(plan)
-    double = ("debugCfg 0", "ball cfg 1 1", "triggerCfg 32 1 0", *triggers)
+    double = ("debugCfg 0", "ball cfg 1 1", "triggerCfg 32 1 0", "ball status", *triggers)
     return (*shot_profile(plan), *double, "sensorStart", "sensorStop"), double
 
 
@@ -78,6 +78,8 @@ class ShotCollector(ActiveCollector):
         self.trigger_observation = None
         self.notice_rows = []
         self.command_boundary = None
+        self._ball_status_count = 0
+        self._ball_status_signature = None
 
     def establish_fresh_runtime(self):
         """Only the RAM loader's fresh startup may initialize generation tracking."""
@@ -175,6 +177,8 @@ class ShotCollector(ActiveCollector):
         self.candidate_loss = None
         self._pending_trigger_callback = False
         self.trigger_observation = None
+        self._ball_status_count = 0
+        self._ball_status_signature = None
         self.command("debugCfg 0")
         self.command("triggerCfg 32 1 0")
         self.command("ball cfg 1 1")
@@ -189,7 +193,9 @@ class ShotCollector(ActiveCollector):
             if state["capture"]["active"] != "1":
                 raise ValueError("IWR stopped before ball placement")
             phase = state["ball"]["state"]
+            stats_index = len(self.rows) - 1
             publish("learning_background" if phase == "building" else "place_ball", state)
+            self._retain_ball_status(state, stats_index, cancelled)
             if phase == "locked":
                 if state["ball"]["reason"] == "gone":
                     self.sleep(0.1)
@@ -200,6 +206,33 @@ class ShotCollector(ActiveCollector):
                 return index, state
             self.sleep(0.1)
         raise TimeoutError("no stable IWR ball placement observed")
+
+    def _retain_ball_status(self, state, stats_index, cancelled):
+        """Keep bounded debug replies beside their preceding, non-atomic stats."""
+        if cancelled():
+            raise InterruptedError("session stopped")
+        if state["trigger"]["enabled"] != "0" or state["trigger"]["latched"] != "0":
+            return
+        signature = tuple(
+            state["ball"][key]
+            for key in ("state", "follow", "bin", "reason", "locks", "releases", "window")
+        )
+        if self._ball_status_count >= 16 or signature == self._ball_status_signature:
+            return
+        self._ball_status_count += 1
+        self._ball_status_signature = signature
+        row_index = len(self.rows)
+        try:
+            self.command("ball status")
+        finally:
+            if len(self.rows) > row_index:
+                self.rows[row_index]["ball_status_context"] = {
+                    "preceding_stats_exchange_index": stats_index,
+                    "preceding_stats_state": deepcopy(state),
+                    "non_atomic": True,
+                    "timestamp_meaning": "Host status intervals; state may change between replies.",
+                    "physical_timing_qualified": False,
+                }
 
     def _require_candidate(self, state, index, previous=None):
         """Require current firmware support, without inventing a confidence threshold."""
