@@ -758,6 +758,7 @@ def wait_retry(collector, files, result=None):
 def inspect_ball_lock(collector, files, folder):
     """Stop on the first host-observed lock, before any shot preparation."""
     from ball_lock_inspection import capture_stopped_evidence, eligible_binding
+    from inspection_camera import InspectionCamera
 
     if (
         not collector.fresh_runtime
@@ -784,9 +785,12 @@ def inspect_ball_lock(collector, files, folder):
         "attempt_id": uuid.uuid4().hex,
         "outcome": "failed",
     }
+    camera = InspectionCamera(folder, result["session_id"], result["attempt_id"])
 
     def observe(phase, state):
         locked = state["ball"]["state"] == "locked"
+        observed_ns = collector.now()
+        camera.observe("locked" if locked else phase, observed_ns)
         files.publish(
             "inspection_locked" if locked else phase,
             iwr=state,
@@ -811,11 +815,12 @@ def inspect_ball_lock(collector, files, folder):
                 first_locked_status_receive_monotonic_ns=row.get(
                     "cli_ready_ns", row.get("after_ns")
                 ),
-                first_locked_host_observation_monotonic_ns=collector.now(),
+                first_locked_host_observation_monotonic_ns=observed_ns,
             )
             raise ObservedLock()
 
     try:
+        camera.start()
         collector.begin()
         collector.wait_ball(observe, files.cancelled)
         raise RuntimeError("inspection wait returned without observing lock")
@@ -833,8 +838,13 @@ def inspect_ball_lock(collector, files, folder):
         try:
             with suspended_controls(collector):
                 result["stop_request_monotonic_ns"] = collector.now()
-                collector.finish()
-                result["stop_completion_monotonic_ns"] = collector.now()
+                try:
+                    collector.finish()
+                    result["stop_completion_monotonic_ns"] = collector.now()
+                finally:
+                    camera.stop()
+                    if camera.cleanup_failed:
+                        result["companion_error"] = "Inspection camera cleanup failed; retry is unsafe."
                 files.publish(
                     "saving",
                     diagnostic=True,
@@ -854,6 +864,17 @@ def inspect_ball_lock(collector, files, folder):
             if original is None:
                 raise
         finally:
+            try:
+                result["camera_evidence"] = camera.finish(
+                    radar_stopped=collector.state.get("stop_verified", False)
+                )
+            except Exception as error:  # pylint: disable=broad-exception-caught
+                result["camera_evidence"] = {
+                    "status": "unavailable", "frames_saved": 0,
+                    "reason": f"Camera evidence processing failed: {error!r}",
+                    "physical_ball_confirmed": False, "details": None,
+                    "cleanup_failed": camera.cleanup_failed,
+                }
             result["iwr_lifecycle"] = deepcopy(collector.state)
             (folder / "RESULT.json").write_text(json.dumps(result, indent=2) + "\n")
             (folder / "iwr-exchanges.json").write_text(json.dumps(collector.rows, indent=2) + "\n")
