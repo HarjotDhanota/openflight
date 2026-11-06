@@ -2,6 +2,7 @@
 
 import argparse
 import base64
+import hashlib
 import json
 import signal
 import subprocess
@@ -19,9 +20,10 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
-from run_joint_clock import load_package  # noqa: E402
+from run_joint_clock import load_package, open_existing_serial  # noqa: E402
 
 from openflight.camera import iwr_capture_plan  # noqa: E402
+from openflight.camera.sync_resume import inspect_prior  # noqa: E402
 
 RESTORE_INSTRUCTIONS = (
     "S1.1 OFF, S1.2 OFF, S1.3 ON; leave S1.4/S1.5 unchanged, then reconnect only IWR USB."
@@ -344,44 +346,78 @@ def resource_ownership():
         return {"resources_released": False, "ownership_error": repr(error)}
 
 
+def resume_proof(package, files, capture_plan):
+    """Recheck every hashed prior input before opening the application UART."""
+    receipt = json.loads((files.folder / "resume.json").read_text(encoding="utf-8"))
+    session = receipt.get("prior_session_id", "")
+    if len(session) != 32 or any(char not in "abcdef0123456789" for char in session):
+        raise ValueError("Invalid linked prior session")
+    prior = files.folder.parent / session
+    if prior.is_symlink() or prior.resolve() == files.folder.resolve():
+        raise ValueError("Invalid prior session location")
+    proof = inspect_prior(
+        prior,
+        manifest_sha256=hashlib.sha256((package / "MANIFEST.json").read_bytes()).hexdigest(),
+        capture_plan=capture_plan,
+    )
+    if proof != receipt:
+        raise ValueError("Linked prior evidence changed; resume refused")
+    return proof
+
+
 @contextmanager
-def open_runtime(package, files, *, capture_plan=iwr_capture_plan.DEFAULT):
+def open_runtime(package, files, *, capture_plan=iwr_capture_plan.DEFAULT, resume=False):
     """One RAM boot and UART lease shared by standalone and normal fusion sessions."""
     from joint_shot_clock import ShotCollector
 
     helper = load_package(package, shot_dumps=True)
     output = files.folder
     collector = None
-    boot_restore_needed = False
+    boot_restore_needed = resume
+    kernel = {"before": None, "attachment": None, "after": None, "new_errors": None}
     try:
+        proof = resume_proof(package, files, capture_plan) if resume else None
         helper.require_unowned()
         if not resource_ownership()["resources_released"]:
             raise ValueError("IWR, OPS and camera must be unowned before this session")
         boot_restore_needed = True
-        files.publish(
-            "switches",
-            message="Set RAM boot: S1.1 ON, S1.2 OFF, S1.3 ON. Leave S1.4/S1.5 unchanged. Do not press RESET yet.",
-            normal_boot_restore_needed=True,
-            restore_instructions=RESTORE_INSTRUCTIONS,
-            resources_released=False,
-        )
-        files.wait("switches_set")
+        if resume:
+            kernel["before"] = helper.kernel_errors()
+            files.publish(
+                "resuming",
+                message="Checking the exact prior idle runtime. Do not RESET or swing.",
+                normal_boot_restore_needed=True,
+                resources_released=False,
+                restore_instructions=RESTORE_INSTRUCTIONS,
+            )
+        else:
+            files.publish(
+                "switches",
+                message="Set RAM boot: S1.1 ON, S1.2 OFF, S1.3 ON. Leave S1.4/S1.5 unchanged. Do not press RESET yet.",
+                normal_boot_restore_needed=True,
+                restore_instructions=RESTORE_INSTRUCTIONS,
+                resources_released=False,
+            )
+            files.wait("switches_set")
         port = helper.enhanced_port()
         with helper.IWR6843DeviceLock(port):
-            with helper.open_serial(port) as handle:
-                files.publish(
-                    "reset",
-                    message="Enhanced UART is open. Press IWR RESET once, wait at least one second, then confirm.",
-                )
-                files.wait("reset_pressed")
-                files.publish(
-                    "loading", message="Loading reviewed temporary RAM firmware; no flash write."
-                )
-                helper.RamOnlyLoader(handle).load_ram((package / "clock.ram.bin").read_bytes())
-                handle.baudrate = 1_041_667
-                handle.timeout, handle.write_timeout = 0.05, 0.25
-                startup = helper.startup(handle)
-                (output / "startup.bin").write_bytes(startup)
+            opener = open_existing_serial if resume else helper.open_serial
+            with opener(port) as handle:
+                if not resume:
+                    files.publish(
+                        "reset",
+                        message="Enhanced UART is open. Press IWR RESET once, wait at least one second, then confirm.",
+                    )
+                    files.wait("reset_pressed")
+                    files.publish(
+                        "loading",
+                        message="Loading reviewed temporary RAM firmware; no flash write.",
+                    )
+                    helper.RamOnlyLoader(handle).load_ram((package / "clock.ram.bin").read_bytes())
+                    handle.baudrate = 1_041_667
+                    handle.timeout, handle.write_timeout = 0.05, 0.25
+                    startup = helper.startup(handle)
+                    (output / "startup.bin").write_bytes(startup)
                 collector = ShotCollector(
                     handle,
                     build=helper.verify_package()["source_fingerprint"],
@@ -390,8 +426,37 @@ def open_runtime(package, files, *, capture_plan=iwr_capture_plan.DEFAULT):
                     capture_plan=capture_plan,
                 )
                 # the session header names the plan and every profile line it sends
-                files.publish("loading", iwr_capture_plan=deepcopy(collector.capture_plan))
-                collector.establish_fresh_runtime()
+                files.publish(
+                    "resuming" if resume else "loading",
+                    iwr_capture_plan=deepcopy(collector.capture_plan),
+                )
+                if resume:
+                    attachment = collector.attach_zero_attempt_runtime(proof["runtime"])
+                    attachment.update(
+                        prior=proof,
+                        connection=collector.connection,
+                        host_boot=collector.host_boot,
+                        context=asdict(collector.context),
+                        generation=collector.generation,
+                        next_shot=collector.next_shot,
+                        generation_basis="Original fresh never-RF journal and controlled exclusive workflow; not inferred from frame count alone.",
+                    )
+                    (output / "resume-attachment.json").write_text(
+                        json.dumps(attachment, indent=2) + "\n"
+                    )
+                    (output / "iwr-exchanges.json").write_text(
+                        json.dumps(collector.rows, indent=2) + "\n"
+                    )
+                    files.state["resume_prior_session_id"] = proof["prior_session_id"]
+                    kernel["attachment"] = helper.kernel_errors()
+                    kernel["attachment_new_errors"] = [
+                        row for row in kernel["attachment"] if row not in kernel["before"]
+                    ]
+                    (output / "resume-kernel.json").write_text(json.dumps(kernel, indent=2) + "\n")
+                    if kernel["attachment_new_errors"]:
+                        raise RuntimeError("Resume attachment kernel reliability check failed")
+                else:
+                    collector.establish_fresh_runtime()
                 yield collector
     except BaseException as error:
         files.publish(
@@ -399,6 +464,23 @@ def open_runtime(package, files, *, capture_plan=iwr_capture_plan.DEFAULT):
         )
         raise
     finally:
+        if resume:
+            try:
+                kernel["after"] = helper.kernel_errors()
+                if kernel["before"] is not None:
+                    kernel["new_errors"] = [
+                        row for row in kernel["after"] if row not in kernel["before"]
+                    ]
+            except (
+                OSError,
+                ValueError,
+                RuntimeError,
+                KeyError,
+                subprocess.SubprocessError,
+            ) as error:
+                kernel["collection_error"] = repr(error)
+            (output / "resume-kernel.json").write_text(json.dumps(kernel, indent=2) + "\n")
+            files.state["resume_kernel"] = kernel
         if collector is not None:
             (output / "iwr-exchanges.json").write_text(json.dumps(collector.rows, indent=2) + "\n")
             files.state["iwr_lifecycle"] = collector.state
@@ -408,13 +490,23 @@ def open_runtime(package, files, *, capture_plan=iwr_capture_plan.DEFAULT):
             normal_boot_restore_needed=boot_restore_needed,
             restore_instructions=RESTORE_INSTRUCTIONS if boot_restore_needed else None,
         )
+        if resume and (
+            kernel["new_errors"] or kernel["after"] is None or kernel["attachment"] is None
+        ):
+            files.publish(
+                "failed",
+                message="Resume lease kernel reliability check failed; original evidence retained.",
+            )
+            if sys.exc_info()[0] is None:
+                raise RuntimeError("Resume lease kernel reliability check failed")
 
 
-def run(package, output, *, capture_plan=iwr_capture_plan.DEFAULT):
+def run(package, output, *, capture_plan=iwr_capture_plan.DEFAULT, resume=False):
     """The UI supplies real switch/RESET confirmations; upload is RAM-only."""
     files = SessionFiles(output)
     try:
-        with open_runtime(package, files, capture_plan=capture_plan) as collector:
+        options = {"resume": True} if resume else {}
+        with open_runtime(package, files, capture_plan=capture_plan, **options) as collector:
             for index in range(1, 101):
                 files.publish(
                     "next",
@@ -425,7 +517,21 @@ def run(package, output, *, capture_plan=iwr_capture_plan.DEFAULT):
                 attempt(collector, files, output / f"attempt-{index:03d}")
             files.publish("finished", message="Session limit reached.")
     except (InterruptedError, KeyboardInterrupt):
-        files.publish("stopped", message="Session stopped. Original attempt records retained.")
+        kernel = files.state.get("resume_kernel")
+        if (
+            kernel is not None
+            and (
+                kernel.get("new_errors")
+                or kernel.get("after") is None
+                or kernel.get("attachment") is None
+            )
+        ) or files.state.get("resources_released") is False:
+            files.publish(
+                "failed",
+                message="Session stopped with failed kernel or ownership checks; original evidence retained.",
+            )
+        else:
+            files.publish("stopped", message="Session stopped. Original attempt records retained.")
 
 
 def main():
@@ -433,6 +539,7 @@ def main():
     parser.add_argument("--clock-package", required=True, type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--resume-zero-attempt", action="store_true")
     parser.add_argument(
         "--iwr-capture-plan",
         choices=iwr_capture_plan.names(),
@@ -460,7 +567,12 @@ def main():
         raise InterruptedError("tester stopped session")
 
     signal.signal(signal.SIGTERM, stop)
-    run(args.clock_package.resolve(), args.output, capture_plan=args.iwr_capture_plan)
+    run(
+        args.clock_package.resolve(),
+        args.output,
+        capture_plan=args.iwr_capture_plan,
+        resume=args.resume_zero_attempt,
+    )
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -11,7 +12,7 @@ from pathlib import Path
 
 from flask import jsonify, request, send_file
 
-from openflight.camera import iwr_capture_plan
+from openflight.camera import iwr_capture_plan, sync_resume
 
 SESSION = re.compile(r"[a-f0-9]{32}")
 COMMANDS = {"switches": "switches_set", "reset": "reset_pressed", "next": "next"}
@@ -51,6 +52,8 @@ class InternalSyncController:
             "phase": "idle",
             "physical_timing_qualified": False,
             "message": "Start an internal-trigger capture session.",
+            "resume_available": False,
+            "resume_reason": "No retained zero-attempt session.",
         }
         if self.session:
             path = self.root / self.session / "status.json"
@@ -66,7 +69,85 @@ class InternalSyncController:
             state["job"] = job
             if job.get("action") == self.job_action and job.get("state") == "error":
                 state.update(phase="failed", message=job.get("message", "Session failed"))
+            try:
+                self.resume_proof()
+                state.update(
+                    resume_available=True,
+                    resume_reason="Saved zero-attempt evidence qualifies; explicit Resume must verify the same idle runtime.",
+                )
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
+                state["resume_reason"] = str(error)
         return state
+
+    def resume_proof(self):
+        """Only server-selected retained files can authorize a device check."""
+        if self.jobs.status().get("state") == "running":
+            raise RuntimeError("A tester action is still running")
+        if self.session is None or self.package is None:
+            raise ValueError("No configured retained session")
+        return sync_resume.inspect_prior(
+            self.root / self.session,
+            manifest_sha256=hashlib.sha256(
+                (self.package / "MANIFEST.json").read_bytes()
+            ).hexdigest(),
+            capture_plan=self.capture_plan,
+        )
+
+    def resume(self, token):
+        """Create a new child; the worker checks identity without RAM load or RF."""
+        with self.lock:
+            if not self.session:
+                raise RuntimeError("No retained session")
+            state = json.loads((self.root / self.session / "status.json").read_text())
+            if not token or token != state.get("phase_token"):
+                raise RuntimeError("Session changed; refresh before resuming")
+            proof = self.resume_proof()
+            self.release()
+            session = uuid.uuid4().hex
+            folder = self.root / session
+            folder.mkdir(parents=True, exist_ok=False)
+            (folder / "resume.json").write_text(
+                json.dumps(proof, indent=2) + "\n", encoding="utf-8"
+            )
+            (folder / "status.json").write_text(
+                json.dumps(
+                    {
+                        "phase": "resuming",
+                        "phase_token": uuid.uuid4().hex,
+                        "attempts": [],
+                        "normal_boot_restore_needed": True,
+                        "resources_released": False,
+                        "physical_timing_qualified": False,
+                        "message": "Verifying the prior idle runtime; do not RESET or swing.",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            self.launch(session, folder, resume=True)
+            return self.status()
+
+    def launch(self, session, folder, *, resume=False):
+        """Publish one new owner before starting its fixed worker command."""
+        command = [
+            sys.executable,
+            "-B",
+            str(self.source / "scripts/hardware-test/tester_sync_session.py"),
+            "--clock-package",
+            str(self.package),
+            "--output",
+            str(folder),
+            "--execute",
+            "--iwr-capture-plan",
+            self.capture_plan,
+        ]
+        if resume:
+            command.append("--resume-zero-attempt")
+        self.session = session
+        latest = self.root / "latest-session.tmp"
+        latest.write_text(session + "\n", encoding="utf-8")
+        latest.replace(self.root / "latest-session.txt")
+        self.jobs.start("internal_sync", [command], folder / "session.log")
 
     def start(self):
         """Launch the reviewed script through the same owner as all tester actions."""
@@ -94,23 +175,7 @@ class InternalSyncController:
                 )
                 + "\n"
             )
-            command = [
-                sys.executable,
-                "-B",
-                str(self.source / "scripts/hardware-test/tester_sync_session.py"),
-                "--clock-package",
-                str(self.package),
-                "--output",
-                str(folder),
-                "--execute",
-                "--iwr-capture-plan",
-                self.capture_plan,
-            ]
-            self.session = session
-            latest = self.root / "latest-session.tmp"
-            latest.write_text(session + "\n", encoding="utf-8")
-            latest.replace(self.root / "latest-session.txt")
-            self.jobs.start("internal_sync", [command], folder / "session.log")
+            self.launch(session, folder)
             return self.status()
 
     def command(self, command, token):
@@ -174,6 +239,18 @@ def register(app, controller, page):
         try:
             return jsonify(controller.command(payload.get("command"), payload.get("phase_token")))
         except (ValueError, RuntimeError) as error:
+            return jsonify({"error": str(error)}), 409
+
+    @app.post("/api/tester/internal-sync/resume")
+    def sync_resume_session():
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"error": "JSON object required"}), 400
+        if set(payload) != {"phase_token"}:
+            return jsonify({"error": "Only the current phase_token is accepted"}), 409
+        try:
+            return jsonify(controller.resume(payload["phase_token"])), 202
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
             return jsonify({"error": str(error)}), 409
 
     @app.get("/api/tester/internal-sync/file/<session>/<path:name>")
