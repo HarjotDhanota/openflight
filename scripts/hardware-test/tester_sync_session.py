@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import signal
+import struct
 import subprocess
 import sys
 import time
@@ -30,10 +31,18 @@ RESTORE_INSTRUCTIONS = (
 )
 
 
+class AttemptStopped(InterruptedError):
+    """Pause only this standalone attempt at an exchange boundary."""
+
+
+class SessionEnded(InterruptedError):
+    """Close the loaded owner after bounded acquisition cleanup."""
+
+
 class SessionFiles:
     """Atomic status and phase-bound operator commands; no arbitrary device commands."""
 
-    def __init__(self, folder):
+    def __init__(self, folder, *, cooperative=False):
         self.folder = folder
         self.folder.mkdir(parents=True, exist_ok=True)
         self.state = {
@@ -43,35 +52,70 @@ class SessionFiles:
             "physical_timing_qualified": False,
         }
         self.offset = 0
+        self.cooperative = cooperative
+        self.tokens = {}
+        self.seen_commands = set()
+        self.ending = False
 
     def publish(self, phase, **fields):
         if phase != self.state["phase"]:
             self.state["phase_token"] = uuid.uuid4().hex
         self.state.update(phase=phase, updated_mono_ns=time.monotonic_ns(), **fields)
+        self.tokens[self.state["phase_token"]] = self.state.get("attempt_number")
         temporary = self.folder / "status.tmp"
         temporary.write_text(json.dumps(self.state, indent=2) + "\n", encoding="utf-8")
         temporary.replace(self.folder / "status.json")
 
     def command(self):
+        if self.ending:
+            raise SessionEnded("operator ended session")
         path = self.folder / "commands.jsonl"
         if not path.exists():
             return None
+        selected = None
         with path.open(encoding="utf-8") as stream:
             stream.seek(self.offset)
-            line = stream.readline()
-            if not line.endswith("\n"):
-                return None
-            self.offset = stream.tell()
-        row = json.loads(line)
-        if row.get("phase_token") != self.state["phase_token"]:
-            return None
-        if row.get("command") == "stop":
+            while True:
+                line = stream.readline()
+                if not line.endswith("\n"):
+                    break
+                self.offset = stream.tell()
+                row = json.loads(line)
+                name, token = row.get("command"), row.get("phase_token")
+                command_id = row.get("command_id")
+                if command_id is not None:
+                    if command_id in self.seen_commands:
+                        continue
+                    self.seen_commands.add(command_id)
+                valid = token == self.state["phase_token"]
+                if self.cooperative and name in {"stop", "end"}:
+                    known = token in self.tokens
+                    same_attempt = self.tokens.get(token) == self.state.get("attempt_number")
+                    accepted = command_id is not None and row.get("session_id") == self.folder.name
+                    valid = known and (name == "end" or same_attempt or accepted)
+                    valid = valid and row.get("session_id", self.folder.name) == self.folder.name
+                if not valid:
+                    continue
+                if name == "end" and self.cooperative:
+                    selected = "end"
+                elif name == "stop" and selected != "end":
+                    selected = "stop"
+                elif selected is None:
+                    selected = name
+                if not self.cooperative:
+                    break
+        if selected == "end":
+            self.ending = True
+            raise SessionEnded("operator ended session")
+        if selected == "stop":
+            if self.cooperative:
+                raise AttemptStopped("operator stopped attempt")
             raise InterruptedError("operator stopped session")
-        return row.get("command")
+        return selected
 
     def wait(self, expected):
         """Keep stopped Next waits open; physical confirmations retain their deadline."""
-        deadline = None if expected == "next" else time.monotonic() + 900
+        deadline = None if expected in {"next", "retry"} else time.monotonic() + 900
         while deadline is None or time.monotonic() < deadline:
             if self.command() == expected:
                 return
@@ -141,9 +185,95 @@ def camera_evidence(folder, rig, *, previous_metadata=()):
     }
 
 
+@contextmanager
+def suspended_controls(collector):
+    """Cleanup and read-only evidence checks must finish even after operator Stop."""
+    boundary = getattr(collector, "command_boundary", None)
+    collector.command_boundary = None
+    try:
+        yield
+    finally:
+        collector.command_boundary = boundary
+
+
+def retry_safety(collector, result=None):
+    """Read the stopped runtime afresh without releasing or rearming any result."""
+    with suspended_controls(collector):
+        return _retry_safety(collector, result)
+
+
+def _retry_safety(collector, result):
+    from joint_clock_active import fields_for
+
+    proof = {"available": False, "reason": "", "state": None}
+    if collector.failed or (
+        collector.state["rf_start_attempted"] and not collector.state["stop_verified"]
+    ):
+        proof["reason"] = "UART or RF stop is uncertain; End session and preserve evidence."
+        return proof
+    collector.seen.add(collector.context.boot)
+    collector.identity()
+    state = collector.snapshot()
+    proof["state"] = state
+    raw_stats = base64.b64decode(collector.rows[-1]["received_b64"])
+    retention = fields_for(raw_stats, "iq8_packed=", ("pending", "post_seen", "post_kept"))
+    proof["retention"] = retention
+    raw, _ = collector.exchange("triggerLog result", done_count=2)
+    proof["result_reply_b64"] = base64.b64encode(raw).decode()
+    header = fields_for(raw, "result ", ("ready", "shot"))
+    pieces = [
+        line.split(maxsplit=1)
+        for line in raw.decode("ascii").splitlines()
+        if line.startswith(("packet ", "packet+ "))
+    ]
+    if [piece[0] for piece in pieces] != ["packet", "packet+"]:
+        raise ValueError("Retry result packet framing is invalid")
+    packet = bytes.fromhex("".join(piece[1] for piece in pieces))
+    if len(packet) != 164:
+        raise ValueError("Retry requires the complete reviewed result packet")
+    version, shot = struct.unpack_from("<II", packet)
+    initial = collector.next_shot == 1 and packet == bytes(164)
+    if (not initial and version != 2) or f"result v{version} " not in raw.decode("ascii"):
+        raise ValueError("Retry result packet version is inconsistent")
+    if str(shot) != header["shot"]:
+        raise ValueError("Retry result header and packet identities differ")
+    capture = state["capture"]
+    proof["result"] = header
+    complete = bool(result and result.get("iwr_raw") and result.get("iwr_shot_id") == shot)
+    if capture["active"] != "0" or state["trigger"]["latched"] != "0":
+        proof["reason"] = "RF or a held trigger is still active."
+    elif header["ready"] != "0" or shot != collector.next_shot - 1:
+        proof["reason"] = "Unconsumed result or shot identity mismatch; Retry cannot discard it."
+    elif any(
+        capture[key] != "0" for key in ("rf_faults", "hwa_missed", "hwa_rearm_err", "freeze_to")
+    ):
+        proof["reason"] = "RF/HWA/stop counters are not clean."
+    elif any(retention[key] != "0" for key in ("pending", "post_seen", "post_kept")):
+        proof["reason"] = "Pending/post-trigger capture data remain; Retry cannot discard them."
+    elif capture["freeze_req"] != (result.get("consumed_freeze_req") if complete else "0"):
+        proof["reason"] = (
+            "Freeze request count differs from the consumed result; pending event cannot be discarded."
+        )
+    elif collector.trigger_observation is not None and not complete:
+        proof["reason"] = "A trigger/freeze was observed without a consumed saved result."
+    elif result and result.get("companion_error"):
+        proof["reason"] = "Companion cleanup failed; Retry is unavailable."
+    else:
+        proof.update(available=True, reason="Same stopped runtime verified; no unconsumed result.")
+    proof.update(
+        runtime=collector.context.boot,
+        connection=collector.connection,
+        generation=collector.generation,
+        next_shot=collector.next_shot,
+        reused_clock_mapping=False,
+    )
+    return proof
+
+
 def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None):
     """Both radars self-trigger; OPS GPIO retains the camera; IWR is never forced."""
     from joint_clock_rig import RigControl
+    from joint_shot_clock import CandidateUnavailable
     from ops_serial_journal import SerialJournal
     from record_ops_sync import record_gpio
 
@@ -215,8 +345,12 @@ def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None
     cancelled = cancelled or files.cancelled
     row_start = len(collector.rows)
     try:
+        if files.cooperative:
+            files.cancelled()
         collector.begin()
         index, address = collector.wait_ball(observe, cancelled)
+        if files.cooperative:
+            files.cancelled()
         result["address_observation"] = address
         files.publish(
             "preparing_sensors",
@@ -251,7 +385,11 @@ def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None
                 else {}
             ),
         )
+        if files.cooperative:
+            files.cancelled()
         rig.prepare()
+        if files.cooperative:
+            files.cancelled()
         collector.arm(index)
         result["armed_mono_ns"] = time.monotonic_ns()
         rig.start_wait()
@@ -261,6 +399,9 @@ def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None
         (folder / "iwr-result.bin").write_bytes(base64.b64decode(held["result_b64"]))
         (folder / "iwr-clock.bin").write_bytes(base64.b64decode(held["packet_b64"]))
         (folder / "iwr-held.json").write_text(json.dumps(held, indent=2, default=asdict) + "\n")
+        if files.cooperative:
+            result["held_capture_state"] = collector.snapshot()
+            result["consumed_freeze_req"] = result["held_capture_state"]["capture"]["freeze_req"]
         borrowed = object.__new__(IWR6843Radar)
         with (folder / "iwr-dump-uart.jsonl").open("x", encoding="utf-8") as journal:
 
@@ -269,13 +410,30 @@ def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None
                 journal.flush()
 
             borrowed.ser = SerialJournal(collector.port, emit)
+            if files.cooperative:
+                files.cancelled()
             raw, raw_meta = collector.read_raw_dump(borrowed)
         (folder / "iwr-dump.bin").write_bytes(raw)
         result["iwr_raw"] = raw_meta
         result["iwr_shot_id"] = held["record"]["shot_id"]
         result["iwr_generation"] = held["record"]["generation"]
+        if files.cooperative:
+            files.cancelled()
+    except (AttemptStopped, CandidateUnavailable) as error:
+        if not files.cooperative:
+            raise
+        result.update(
+            error=repr(error),
+            aborted="iwr_raw" not in result and "iwr_trigger_observation" not in result,
+            pause_requested=True,
+        )
+    except SessionEnded as error:
+        result.update(error=repr(error), aborted="iwr_raw" not in result, end_requested=True)
+        raise
     except TimeoutError as error:
         result["error"] = repr(error)
+        if files.cooperative and "armed_mono_ns" not in result:
+            result.update(aborted=True, pause_requested=True)
         if collector.failed:
             raise
     except BaseException as error:
@@ -284,13 +442,32 @@ def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None
             (folder / "iwr-dump.partial.bin").write_bytes(error.raw)
         raise
     finally:
+        if files.cooperative and (result.get("pause_requested") or result.get("end_requested")):
+            files.publish(
+                "stopping",
+                retry_available=False,
+                message="Stopping this attempt safely; do not swing.",
+            )
         result["disarm_requested_mono_ns"] = time.monotonic_ns()
+        diagnostic_error = None
+        boundary = getattr(collector, "command_boundary", None)
+        collector.command_boundary = None
         try:
+            if files.cooperative and not collector.failed and collector.state["rf_start_attempted"]:
+                try:
+                    result["pre_stop_state"] = collector.snapshot()
+                except BaseException as error:
+                    result["pre_stop_error"] = repr(error)
+                    diagnostic_error = error
             collector.finish()
+            if diagnostic_error is not None:
+                raise diagnostic_error
         except BaseException as error:
-            result["stop_error"] = repr(error)
+            if error is not diagnostic_error:
+                result["stop_error"] = repr(error)
             raise
         finally:
+            collector.command_boundary = boundary
             if rig is not None:
                 if "error" in result or "stop_error" in result:
                     rig.stop.set()
@@ -326,6 +503,8 @@ def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None
                     or result.get("companion_error"),
                     "iwr_shot_id": result.get("iwr_shot_id"),
                     "camera": result.get("camera"),
+                    "aborted": result.get("aborted", False),
+                    "planned_activity_index": files.state.get("planned_activity_index"),
                 }
             )
     return result
@@ -507,20 +686,92 @@ def open_runtime(package, files, *, capture_plan=iwr_capture_plan.DEFAULT, resum
                 raise RuntimeError("Resume lease kernel reliability check failed")
 
 
+def wait_retry(collector, files, result=None):
+    """Keep the stopped owner; each explicit Retry gets a new read-only proof."""
+    folder = files.folder / "control-proofs"
+    folder.mkdir(exist_ok=True)
+    sequence = len(list(folder.glob("*.json")))
+
+    def check(label):
+        nonlocal sequence
+        proof = retry_safety(collector, result)
+        sequence += 1
+        path = folder / f"{sequence:03d}-{label}.json"
+        with path.open("x", encoding="utf-8") as stream:
+            stream.write(json.dumps(proof, indent=2) + "\n")
+        (files.folder / "iwr-exchanges.json").write_text(
+            json.dumps(collector.rows, indent=2) + "\n"
+        )
+        if collector.failed or (
+            collector.state["rf_start_attempted"] and not collector.state["stop_verified"]
+        ):
+            raise RuntimeError(proof["reason"])
+        return proof
+
+    proof = check("pause")
+    while True:
+        files.publish(
+            "paused",
+            retry_available=proof["available"],
+            retry_reason=proof["reason"],
+            iwr=proof["state"],
+            runtime_retained=True,
+            resources_released=False,
+            message="Attempt paused; do not swing. Retry requires a fresh safety check.",
+        )
+        try:
+            files.wait("retry")
+        except AttemptStopped:
+            continue
+        if not proof["available"]:
+            continue
+        proof = check("retry")
+        if proof["available"]:
+            try:
+                files.cancelled()
+            except AttemptStopped:
+                continue
+            return
+
+
 def run(package, output, *, capture_plan=iwr_capture_plan.DEFAULT, resume=False):
     """The UI supplies real switch/RESET confirmations; upload is RAM-only."""
-    files = SessionFiles(output)
+    files = SessionFiles(output, cooperative=True)
+    files.state.update(planned_activity_index=1, cooperative_control=True, retry_available=False)
     try:
         options = {"resume": True} if resume else {}
         with open_runtime(package, files, capture_plan=capture_plan, **options) as collector:
-            for index in range(1, 101):
+            collector.command_boundary = files.cancelled
+            index, retry, previous = 1, False, None
+            while index <= 100:
+                if not retry:
+                    files.publish(
+                        "next",
+                        message="Remove the ball, leave the hitting area empty, then prepare the next attempt.",
+                        attempt_number=index,
+                        retry_available=False,
+                    )
+                    try:
+                        files.wait("next")
+                    except AttemptStopped:
+                        wait_retry(collector, files, previous)
                 files.publish(
-                    "next",
-                    message="Remove the ball, leave the hitting area empty, then prepare the next attempt.",
+                    "preparing_attempt",
                     attempt_number=index,
+                    retry_available=False,
+                    message="Preparing a fresh attempt; keep the lane empty and do not swing.",
                 )
-                files.wait("next")
-                attempt(collector, files, output / f"attempt-{index:03d}")
+                previous = attempt(collector, files, output / f"attempt-{index:03d}")
+                if previous is None:
+                    previous = {}
+                if previous.get("companion_error"):
+                    raise RuntimeError("Companion cleanup failed; session cannot retry")
+                if not previous.get("aborted"):
+                    files.state["planned_activity_index"] += 1
+                index += 1
+                retry = bool(previous.get("pause_requested"))
+                if retry:
+                    wait_retry(collector, files, previous)
             files.publish("finished", message="Session limit reached.")
     except (InterruptedError, KeyboardInterrupt):
         kernel = files.state.get("resume_kernel")
@@ -537,7 +788,12 @@ def run(package, output, *, capture_plan=iwr_capture_plan.DEFAULT, resume=False)
                 message="Session stopped with failed kernel or ownership checks; original evidence retained.",
             )
         else:
-            files.publish("stopped", message="Session stopped. Original attempt records retained.")
+            files.publish(
+                "stopped",
+                retry_available=False,
+                runtime_retained=False,
+                message="Session ended. Original attempt records retained.",
+            )
 
 
 def main():

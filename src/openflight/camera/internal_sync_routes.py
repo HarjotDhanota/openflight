@@ -15,7 +15,7 @@ from flask import jsonify, request, send_file
 from openflight.camera import iwr_capture_plan, sync_resume
 
 SESSION = re.compile(r"[a-f0-9]{32}")
-COMMANDS = {"switches": "switches_set", "reset": "reset_pressed", "next": "next"}
+COMMANDS = {"switches": "switches_set", "reset": "reset_pressed", "next": "next", "paused": "retry"}
 
 
 class InternalSyncController:
@@ -67,8 +67,25 @@ class InternalSyncController:
                 state["normal_boot_restoration"] = "owner_confirmed_not_independently_queried"
             job = self.jobs.status()
             state["job"] = job
+            if self.job_action != "internal_sync" or state["phase"] != "paused":
+                state["retry_available"] = False
             if job.get("action") == self.job_action and job.get("state") == "error":
-                state.update(phase="failed", message=job.get("message", "Session failed"))
+                state.update(
+                    phase="failed",
+                    retry_available=False,
+                    message=job.get("message", "Session failed"),
+                )
+            if (
+                self.job_action == "internal_sync"
+                and state["phase"] not in {"stopped", "failed", "finished"}
+                and not (job.get("action") == self.job_action and job.get("state") == "running")
+            ):
+                state.update(
+                    phase="failed",
+                    retry_available=False,
+                    orphaned_reason="No matching running session worker; retained state cannot authorize acquisition.",
+                    message="Session worker unavailable; do not swing or retry.",
+                )
             try:
                 self.resume_proof()
                 state.update(
@@ -182,7 +199,11 @@ class InternalSyncController:
         """Only phase-specific confirmations and Stop can reach the worker."""
         with self.lock:
             state = self.status()
-            if not self.session or token != state.get("phase_token"):
+            if (
+                not self.session
+                or token != state.get("phase_token")
+                or (self.job_action == "internal_sync" and not token)
+            ):
                 raise RuntimeError("Session changed; refresh status before confirming")
             if (
                 command == "restored"
@@ -200,15 +221,54 @@ class InternalSyncController:
                     + "\n"
                 )
                 return {"accepted": True}
-            if command != "stop" and COMMANDS.get(state["phase"]) != command:
+            if self.job_action != "internal_sync":
+                if command in {"retry", "end"}:
+                    raise ValueError(
+                        "Pause/Retry/End controls apply only to the standalone session"
+                    )
+                if command != "stop" and COMMANDS.get(state["phase"]) != command:
+                    raise ValueError("Command is not valid in the current phase")
+                if command != "stop" or state.get("phase_token"):
+                    with (self.root / self.session / "commands.jsonl").open(
+                        "a", encoding="utf-8"
+                    ) as stream:
+                        stream.write(json.dumps({"command": command, "phase_token": token}) + "\n")
+                if command == "stop":
+                    self.jobs.cancel()
+                return {"accepted": True}
+            if (
+                state.get("job", {}).get("action") != self.job_action
+                or state.get("job", {}).get("state") != "running"
+            ):
+                raise RuntimeError("No matching running session worker")
+            if command == "retry" and state.get("retry_available") is not True:
+                raise RuntimeError(state.get("retry_reason", "Retry is not safe"))
+            if command not in {"stop", "end"} and COMMANDS.get(state["phase"]) != command:
                 raise ValueError("Command is not valid in the current phase")
-            if command != "stop" or state.get("phase_token"):
-                with (self.root / self.session / "commands.jsonl").open(
-                    "a", encoding="utf-8"
-                ) as stream:
-                    stream.write(json.dumps({"command": command, "phase_token": token}) + "\n")
-            if command == "stop":
-                self.jobs.cancel()
+            path = self.root / self.session / "commands.jsonl"
+            previous = (
+                [json.loads(line) for line in path.read_text().splitlines()]
+                if path.exists()
+                else []
+            )
+            if any(
+                row.get("command") == command and row.get("phase_token") == token
+                for row in previous
+            ):
+                return {"accepted": True, "duplicate": True}
+            with path.open("a", encoding="utf-8") as stream:
+                stream.write(
+                    json.dumps(
+                        {
+                            "command": command,
+                            "phase_token": token,
+                            "session_id": self.session,
+                            "command_id": uuid.uuid4().hex,
+                            "attempt_number": state.get("attempt_number"),
+                        }
+                    )
+                    + "\n"
+                )
             return {"accepted": True}
 
 

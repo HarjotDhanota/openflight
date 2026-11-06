@@ -37,10 +37,13 @@ async function fixture(viewport = { width: 800, height: 400 }) {
     if (route.request().method() === 'POST') {
       const payload = route.request().postDataJSON();
       commands.push(payload);
-      assert.equal(payload.phase_token, mock.state.phase_token);
+      if (payload.phase_token !== mock.state.phase_token) return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'Session changed; refresh before retrying' }) });
       if (mock.advance) {
-        const phase = { switches_set: 'reset', reset_pressed: 'next', stop: 'stopped', restored: 'stopped' }[payload.command];
+        const phase = { switches_set: 'reset', reset_pressed: 'next', stop: 'paused', retry: 'learning_background', end: 'stopped', restored: 'stopped' }[payload.command];
         if (phase) mock.state = { ...mock.state, phase, phase_token: phase + commands.length, resources_released: true };
+        if (payload.command === 'stop') Object.assign(mock.state, { retry_available: true, retry_reason: 'RF stopped and UART verified', resources_released: false });
+        if (payload.command === 'retry') Object.assign(mock.state, { retry_available: false, iwr: null });
+        if (payload.command === 'end') Object.assign(mock.state, { retry_available: false, iwr: null });
         if (payload.command === 'restored') mock.state.normal_boot_restore_needed = false;
       }
       if (mock.network === 'command-failure') return route.abort();
@@ -64,6 +67,186 @@ function saved(index, status = 'captured_unqualified') {
   return { name: `attempt-${String(index).padStart(3, '0')}`, status, error: status === 'partial' ? 'TimeoutError: no IWR detection' : null, iwr_shot_id: index, camera: { clips: [{ metadata: 'camera/capture/metadata.json' }] } };
 }
 
+function healthyIwr() {
+  return { capture: { active: '1' }, trigger: { enabled: '1', latched: '0' }, ball: { state: 'locked', follow: '1', reason: 'none', bin: '32', locks: '1', releases: '0' }, candidate_loss: null, trigger_observed: false };
+}
+
+for (const [width, height] of [[1024, 600], [800, 480], [800, 400]]) {
+  test(`reloaded stopping and preparing attempt phases stay readable and quiet at ${width}x${height}`, async () => {
+    const f = await fixture({ width, height });
+    try {
+      for (const [phase, label] of [['stopping', 'Stopping attempt'], ['preparing_attempt', 'Preparing attempt']]) {
+        await f.phase(phase, { iwr: healthyIwr(), retry_available: false });
+        await f.page.reload();
+        await f.page.waitForFunction(() => document.querySelector('#connection').textContent === 'Status connected');
+        assert.equal(await f.page.locator('#phase').innerText(), label);
+        assert.match(await f.page.locator('#instruction').innerText(), /Do not swing|Hold still/i);
+        assert.doesNotMatch(await f.page.locator('section[aria-live]').innerText(), /Within 30 seconds|One dry swing/i);
+        assert.equal(await f.page.locator('#retry').isVisible(), false);
+        assert.equal(await f.page.locator('#confirm').isVisible(), false);
+        assert.deepEqual(f.commands, []);
+      }
+      assert.deepEqual(f.errors, []);
+    } finally { await f.context.close(); }
+  });
+}
+
+for (const [width, height] of [[1024, 600], [800, 480], [800, 400]]) {
+  test(`Stop, explicit safe Retry and End preserve the planned slot at ${width}x${height}`, async () => {
+    const f = await fixture({ width, height });
+    try {
+      assert.equal(await f.page.locator('#retry').count(), 1);
+      f.mock.advance = true;
+      await f.phase('armed', { iwr: healthyIwr(), planned_activity_index: 1, normal_boot_restore_needed: true });
+      await f.page.locator('#stop').tap();
+      await f.page.waitForFunction(() => document.querySelector('#phase').textContent === 'Attempt paused');
+      assert.match(await f.page.locator('#instruction').innerText(), /do not swing/i);
+      assert.deepEqual(f.commands.map(row => row.command), ['stop']);
+      const aborted = { ...saved(1, 'partial'), aborted: true, planned_activity_index: 1 };
+      await f.phase('paused', { attempts: [aborted], planned_activity_index: 1, retry_available: true, retry_reason: 'Stopped safely', iwr: null });
+      assert.match(await f.page.locator('#retry').innerText(), /Retry dry swing/);
+      assert.equal(await f.page.locator('#retry').isEnabled(), true);
+      assert.match(await f.page.locator('#progress').innerText(), /Planned slot 1 of 3/);
+      assert.match(await f.page.locator('.attempt').innerText(), /Planned dry swing/);
+      const retry = await f.page.locator('#retry').boundingBox();
+      const end = await f.page.locator('#end').boundingBox();
+      assert.ok(retry.y + retry.height <= height && end.y + end.height <= height);
+      if (process.env.OPENFLIGHT_UI_EVIDENCE) {
+        fs.mkdirSync(process.env.OPENFLIGHT_UI_EVIDENCE, { recursive: true });
+        await f.page.screenshot({ path: path.join(process.env.OPENFLIGHT_UI_EVIDENCE, `paused-${width}x${height}.png`) });
+      }
+      await f.page.locator('#retry').dblclick();
+      await f.page.waitForFunction(() => document.querySelector('#phase').textContent === 'Learning the empty hitting area');
+      assert.deepEqual(f.commands.map(row => row.command), ['stop', 'retry']);
+      assert.equal(await f.page.locator('#retry').isVisible(), false);
+      await f.phase('paused', { retry_available: false, retry_reason: 'UART framing uncertain' });
+      assert.equal(await f.page.locator('#retry').isDisabled(), true);
+      assert.match(await f.page.locator('#message').innerText(), /UART framing uncertain/);
+      await f.phase('paused', { retry_available: true, planned_activity_index: 2, attempts: [saved(1), { ...saved(2, 'partial'), planned_activity_index: 2 }] });
+      assert.equal(await f.page.locator('#retry').isDisabled(), true);
+      assert.match(await f.page.locator('#message').innerText(), /review/i);
+      await f.phase('paused', { retry_available: true, planned_activity_index: 1, attempts: [aborted] });
+      await f.page.reload();
+      await f.page.waitForFunction(() => document.querySelector('#connection').textContent === 'Status connected');
+      assert.equal(await f.page.locator('#retry').isEnabled(), true);
+      assert.deepEqual(f.commands.map(row => row.command), ['stop', 'retry']);
+      f.mock.network = 'offline';
+      await f.page.evaluate(() => refresh());
+      assert.equal(await f.page.locator('#retry').isDisabled(), true);
+      assert.equal(await f.page.locator('#end').isDisabled(), true);
+      f.mock.network = 'ok';
+      await f.phase('paused');
+      await f.page.locator('#end').tap();
+      await f.page.waitForFunction(() => document.querySelector('#phase').textContent === 'Stopped');
+      assert.deepEqual(f.commands.map(row => row.command), ['stop', 'retry', 'end']);
+      assert.equal(await f.page.locator('#retry').isVisible(), false);
+      assert.equal(await f.page.locator('#confirm').isVisible(), false);
+      assert.equal(await f.page.locator('#stop').isDisabled(), true);
+      assert.equal(await f.page.locator('#restore').isVisible(), true);
+      assert.deepEqual(f.errors, []);
+    } finally { await f.context.close(); }
+  });
+}
+
+test('Retry uses the current phase token and never repeats a refused or uncertain command', async () => {
+  const f = await fixture();
+  try {
+    assert.equal(await f.page.locator('#retry').count(), 1);
+    await f.phase('paused', { planned_activity_index: 1, retry_available: true });
+    f.mock.state.phase_token = 'new-server-token';
+    await f.page.locator('#retry').tap();
+    assert.equal(f.commands.length, 1);
+    assert.notEqual(f.commands[0].phase_token, f.mock.state.phase_token);
+    await f.page.waitForFunction(() => document.querySelector('#error').textContent.includes('Session changed'));
+    assert.match(await f.page.locator('#error').innerText(), /Session changed/);
+    await f.page.evaluate(() => refresh());
+    assert.equal(f.commands.length, 1);
+    f.mock.network = 'command-failure';
+    await f.page.locator('#retry').tap();
+    await f.page.waitForFunction(() => document.querySelector('#error').textContent.includes('Do not repeat'));
+    assert.equal(f.commands.length, 2);
+    f.mock.network = 'ok';
+    await f.page.evaluate(() => refresh());
+    assert.equal(await f.page.locator('#retry').isDisabled(), true);
+    assert.equal(f.commands.length, 2);
+    assert.match(await f.page.locator('#error').innerText(), /Do not repeat.*Retry/);
+    assert.equal(await f.page.locator('#end').isEnabled(), true);
+  } finally { await f.context.close(); }
+});
+
+test('retained paused or armed status without its live owner never invites Retry or swing', async () => {
+  const f = await fixture();
+  try {
+    for (const phase of ['paused', 'armed']) {
+      for (const job of [{ action: 'internal_sync', state: 'idle' }, { action: 'preflight', state: 'running' }]) {
+        await f.phase(phase, { job, iwr: healthyIwr(), retry_available: true, planned_activity_index: 1 });
+        assert.doesNotMatch(await f.page.locator('section[aria-live]').innerText(), /Within 30 seconds|One dry swing|Tap Retry/i);
+        assert.match(await f.page.locator('#instruction').innerText(), /do not swing/i);
+        assert.equal(await f.page.locator('#retry').isEnabled(), false);
+        assert.equal(await f.page.locator('#end').isEnabled(), false);
+        await f.page.evaluate(() => refresh());
+        assert.deepEqual(f.commands, []);
+      }
+    }
+  } finally { await f.context.close(); }
+});
+
+test('pending and uncertain Stop quiet armed guidance; deliberate End can escalate', async () => {
+  const f = await fixture();
+  try {
+    await f.phase('armed', { iwr: healthyIwr() });
+    await f.page.locator('#stop').tap();
+    assert.doesNotMatch(await f.page.locator('section[aria-live]').innerText(), /Within 30 seconds|make one swing|One dry swing/i);
+    await f.phase('armed', { iwr: healthyIwr() });
+    assert.match(await f.page.locator('#instruction').innerText(), /Hold still/);
+    assert.doesNotMatch(await f.page.locator('section[aria-live]').innerText(), /Within 30 seconds|One dry swing/i);
+    f.mock.network = 'command-failure';
+    await f.page.locator('#end').tap();
+    assert.deepEqual(f.commands.map(row => row.command), ['stop', 'end']);
+    f.mock.network = 'ok';
+    await f.page.evaluate(() => refresh());
+    assert.match(await f.page.locator('#instruction').innerText(), /Hold still/);
+    assert.equal(await f.page.locator('#end').isDisabled(), true);
+    assert.doesNotMatch(await f.page.locator('section[aria-live]').innerText(), /Within 30 seconds|One dry swing/i);
+    await f.phase('paused', { retry_available: true });
+    assert.match(await f.page.locator('#instruction').innerText(), /Hold still.*ending/i);
+    assert.equal(await f.page.locator('#retry').isEnabled(), false);
+    assert.doesNotMatch(await f.page.locator('#message').innerText(), /Tap Retry/);
+    assert.deepEqual(f.errors, []);
+  } finally { await f.context.close(); }
+});
+
+test('the next dry-swing note uses the completed activity after aborted setup files', async () => {
+  const f = await fixture();
+  try {
+    const aborted = { ...saved(1, 'partial'), aborted: true, planned_activity_index: 1 };
+    await f.phase('next', { attempts: [aborted, { ...saved(2), planned_activity_index: 1 }], planned_activity_index: 2 });
+    assert.doesNotMatch(await f.page.locator('#message').innerText(), /Dry-swing partial\/timeout retained/);
+    assert.match(await f.page.locator('#confirm').innerText(), /Prepare real strike/);
+    assert.deepEqual(f.commands, []);
+  } finally { await f.context.close(); }
+});
+
+test('a refused stale Stop remains quiet while current status still says armed', async () => {
+  const f = await fixture();
+  try {
+    await f.phase('armed', { iwr: healthyIwr() });
+    f.mock.state.phase_token = 'advanced-before-stop';
+    await f.page.locator('#stop').tap();
+    await f.page.waitForFunction(() => document.querySelector('#error').textContent.includes('Session changed'));
+    await f.page.evaluate(() => refresh());
+    assert.match(await f.page.locator('#instruction').innerText(), /Hold still/);
+    assert.doesNotMatch(await f.page.locator('section[aria-live]').innerText(), /Within 30 seconds|One dry swing/i);
+    assert.equal(await f.page.locator('#end').isEnabled(), true);
+    assert.deepEqual(f.commands.map(row => row.command), ['stop']);
+    f.mock.advance = true;
+    await f.page.locator('#stop').tap();
+    await f.page.waitForFunction(() => document.querySelector('#phase').textContent === 'Attempt paused');
+    assert.deepEqual(f.commands.map(row => row.command), ['stop', 'stop']);
+    assert.equal(f.commands[1].phase_token, 'advanced-before-stop');
+  } finally { await f.context.close(); }
+});
+
 for (const [width, height] of [[1024, 600], [800, 480], [800, 400]]) {
   test(`guided three-slot flow, refresh and visible actions at ${width}x${height}`, async () => {
     const f = await fixture({ width, height });
@@ -86,7 +269,7 @@ for (const [width, height] of [[1024, 600], [800, 480], [800, 400]]) {
         assert.match(await page.locator('#instruction').innerText(), /Place the ball/);
         await phase('preparing_sensors');
         assert.match(await page.locator('#instruction').innerText(), /Do not swing yet/);
-        await phase('armed');
+        await phase('armed', { iwr: healthyIwr() });
         assert.match(await page.locator('#instruction').innerText(), slot === 1 ? /dry swing.*do not hit/ : /one real strike/);
         assert.match(await page.locator('#message').innerText(), /30 seconds/);
         await page.evaluate(() => scrollTo(0, 0));
@@ -120,6 +303,32 @@ for (const [width, height] of [[1024, 600], [800, 480], [800, 400]]) {
   });
 }
 
+for (const [width, height] of [[1024, 600], [800, 480], [800, 400]]) {
+  test(`candidate loss stays quiet and later trigger wins at ${width}x${height}`, async () => {
+    const f = await fixture({ width, height });
+    try {
+      for (const iwr of [null, { ...healthyIwr(), capture: { active: '0' } }, { ...healthyIwr(), trigger: { enabled: '0', latched: '0' } }, { ...healthyIwr(), ball: { ...healthyIwr().ball, reason: 'gone' } }]) {
+        await f.phase('armed', { iwr });
+        assert.doesNotMatch(await f.page.locator('section[aria-live]').innerText(), /Within 30 seconds|make one swing|One dry swing/i);
+        assert.match(await f.page.locator('#instruction').innerText(), /do not swing/i);
+      }
+      const lost = { ...healthyIwr(), candidate_loss: { reason: 'ball lock changed' } };
+      await f.phase('candidate_lost', { iwr: lost });
+      assert.match(await f.page.locator('#instruction').innerText(), /Candidate lost.*do not swing/i);
+      await f.phase('armed', { iwr: lost });
+      assert.match(await f.page.locator('#instruction').innerText(), /do not swing/i);
+      await f.phase('candidate_lost', { iwr: { ...lost, trigger_observed: true } });
+      assert.match(await f.page.locator('#instruction').innerText(), /Hold still.*trigger observed/i);
+      assert.match(await f.page.locator('#message').innerText(), /Do not swing again/);
+      assert.doesNotMatch(await f.page.locator('section[aria-live]').innerText(), /Within 30 seconds|make one swing|One dry swing/i);
+      await f.phase('candidate_lost', { iwr: { ...lost, trigger: { enabled: '1', latched: '1' } } });
+      assert.match(await f.page.locator('#instruction').innerText(), /Hold still.*trigger observed/i);
+      assert.deepEqual(f.commands, []);
+      assert.deepEqual(f.errors, []);
+    } finally { await f.context.close(); }
+  });
+}
+
 test('partial strike pauses; session identity and saved count survive reload', async () => {
   const f = await fixture();
   try {
@@ -135,6 +344,18 @@ test('partial strike pauses; session identity and saved count survive reload', a
     assert.deepEqual(f.commands, []);
   } finally { await f.context.close(); }
 });
+
+for (const phaseName of ['preparing_sensors', 'armed']) {
+  test(`retained waiting/bin0 state cannot imply a confirmed ball or invite a swing during ${phaseName}`, async () => {
+    const f = await fixture();
+    try {
+      await f.phase(phaseName, { iwr: { capture: { active: '1' }, trigger: { enabled: '1', latched: '0' }, ball: { state: 'waiting', follow: '1', bin: '0' } } });
+      assert.doesNotMatch(await f.page.locator('section[aria-live]').innerText(), /The ball is locked|Within 30 seconds|make one swing|One dry swing/i);
+      assert.match(await f.page.locator('#instruction').innerText(), /Do not swing|Hold still/i);
+      assert.deepEqual(f.commands, []);
+    } finally { await f.context.close(); }
+  });
+}
 
 test('pending command, offline and stalled status lock actions; Stop stays deliberate', async () => {
   const f = await fixture();
@@ -188,11 +409,11 @@ test('switch/reset confirmations, Stop, restoration and parent deadline remain e
     await f.page.waitForFunction(() => document.querySelector('#confirm').textContent === 'RESET pressed; waited at least one second');
     await f.page.locator('#confirm').tap();
     await f.page.waitForFunction(() => document.querySelector('#confirm').textContent === 'Prepare dry swing');
-    await f.page.locator('#stop').tap();
+    await f.page.locator('#end').tap();
     await f.page.waitForFunction(() => document.querySelector('#phase').textContent === 'Stopped');
     assert.match(await f.page.locator('#message').innerText(), /new RAM load unsupervised/);
     await f.page.locator('#restored').tap();
-    assert.deepEqual(f.commands.map(row => row.command), ['switches_set', 'reset_pressed', 'stop', 'restored']);
+    assert.deepEqual(f.commands.map(row => row.command), ['switches_set', 'reset_pressed', 'end', 'restored']);
     assert.equal(await f.page.locator('#start').isVisible(), false);
     await f.phase('next', { job: { action: 'internal_sync', state: 'stopped' } });
     assert.equal(await f.page.locator('#confirm').isVisible(), false);

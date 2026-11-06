@@ -18,6 +18,17 @@ Switch/RESET confirmations are bound to the current session phase. The IWR
 uses this attempt's observed ball bin within the retained profile, not a fixed
 tee-distance assumption. Its RF run is finite (60 nominal seconds); placement
 and arming share a 50-second host budget and the armed wait is at most 30 seconds.
+
+An IWR lock is a sensor candidate, not independently verified ball presence.
+A `locked` candidate whose reason is `gone` stays in the finite placement wait;
+it cannot start sensor preparation. Before enable, a fresh snapshot must retain
+the same healthy state/follow/bin and lock/release epoch/window. No numerical
+confidence floor is added. After enable, a lost candidate gives sticky
+do-not-swing guidance while the bounded result wait continues: departure can
+precede a legitimate trigger. A later latch/notice still retains its result,
+and reacquisition alone cannot invite another swing. These host guards do not
+eliminate firmware false candidates in an empty lane or qualify detection.
+
 The on-screen first-test guide plans one dry swing followed by two real strikes.
 Remove the ball before Prepare, place it only when asked, and wait for Armed
 before one swing within the 30-second armed budget. A dry-swing timeout retains
@@ -70,13 +81,35 @@ runtime recording translation bounds. Do not align samples using the roughly
 7 ms pulse discrepancy seen in the no-swing controls. No such correction is
 applied here.
 
-Stop retains evidence and checks released UART/camera ownership. The page
-then instructs normal switches (S1.1 OFF, S1.2 OFF, S1.3 ON; leave S1.4/S1.5)
-and reconnecting only IWR USB. The owner's acknowledgement is recorded
-separately from independent firmware verification. A new experiment session
-requires this restoration acknowledgement. Do not start a full swing block
-until the first two ball-strike captures have been inspected for matching
-events, impact coverage, clipping and complete radar data.
+On the standalone internal-sync page, Stop attempt and End session are separate
+controls. Stop attempt asks the loaded worker to pause at a safe exchange
+boundary, retain the attempt files, and stop/verify RF; it does not kill the
+worker or reload RAM. A serial transfer
+already in progress must finish its bounded framing before cleanup. Keep power
+and USB connected and do not press RESET while stopping. Button acknowledgement
+is not a verified stop; wait for Paused or the final session status.
+
+Retry is an explicit action on a paused, still-owned session. It is offered only
+after fresh same-runtime checks prove a known stopped state without an
+unconsumed trigger/result or other retained capture that a new start would
+discard. Interrupted framing, uncertain stop, mismatched identities or a lost
+worker refuse Retry. A stale status file alone cannot authorize it. Retry uses
+a new attempt directory and preserves previous partial/error evidence; an
+aborted setup keeps its planned activity slot while the raw attempt number
+advances. It does not automatically repeat the swing or qualify the detector's
+ball candidate.
+
+End session requests final cleanup and closure of the loaded owner. Only after
+resources are reported released does the page instruct normal switches
+(S1.1 OFF, S1.2 OFF, S1.3 ON; leave S1.4/S1.5) and reconnecting only IWR USB.
+The owner's acknowledgement is separate from independent firmware verification.
+Never-attempted Resume is a different restricted path, not recovery for an old
+ended session with RF activity or interrupted UART framing. A new experiment
+session requires normal-boot restoration; none of these controls writes flash.
+Do not start a full swing block until the first two ball-strike captures have
+been inspected for matching events, impact coverage, clipping and complete radar
+data. Software Retry checks do not establish USB-close reliability or physical
+sensor accuracy/timing.
 
 Software checks cover fixed finite commands, split/coalesced serial replies,
 runtime/result identity, original-byte retention, Stop and ownership failures,

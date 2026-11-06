@@ -104,7 +104,7 @@ def test_confirm_and_stop_are_recorded_with_phase_identity(setup):
         .read_text()
         .splitlines()
     ]
-    assert [row["command"] for row in rows] == ["switches_set", "stop"] and jobs.cancelled
+    assert [row["command"] for row in rows] == ["switches_set", "stop"] and not jobs.cancelled
 
 
 def test_owner_restore_ack_is_separate_from_physical_verification(setup):

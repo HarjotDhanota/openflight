@@ -18,7 +18,9 @@ main{padding:.65rem 1rem}h1{font-size:1.25rem;margin:0}section{margin:.65rem 0;p
 <button id="start" type="button">Start capture session</button>
 <button id="confirm" type="button" hidden>Confirm</button>
 <button id="resume" type="button" hidden>Resume loaded session</button>
-<button id="stop" type="button" disabled>Stop session</button>
+<button id="retry" type="button" hidden>Retry attempt</button>
+<button id="stop" type="button" disabled>Stop attempt</button>
+<button id="end" type="button" hidden>End session</button>
 </div>
 <p id="connection" class="muted">Connecting…</p>
 <p id="deadline" class="notice"></p>
@@ -31,25 +33,36 @@ main{padding:.65rem 1rem}h1{font-size:1.25rem;margin:0}section{margin:.65rem 0;p
 <section><h2>Saved attempts</h2><p>Inspect the first two ball strikes before a larger block. “Captured” means files were saved, not that their metrics are accurate.</p><div id="attempts"></div></section>
 </main>
 <script>
-let state={}, busy=false, attemptsKey='', lastStatus=0, connected=false, refreshing=false, pending=null, pendingCommand=null, statusError='', commandError='';
+let state={}, busy=false, attemptsKey='', lastStatus=0, connected=false, refreshing=false, pending=null, pendingCommand=null, interruptionRefused=false, statusError='', commandError='';
 const byId=id=>document.getElementById(id);
-const phases={idle:'Ready',starting:'Preparing session',resuming:'Checking loaded runtime',switches:'Set RAM boot switches',reset:'Press IWR RESET',loading:'Loading temporary firmware',next:'Prepare next attempt',learning_background:'Learning the empty hitting area',place_ball:'Place the ball',preparing_sensors:'Preparing OPS and camera',armed:'Armed — make one swing',saving:'Saving captures',stopped:'Stopped',failed:'Session stopped with an error',finished:'Finished'};
+const phases={idle:'Ready',starting:'Preparing session',resuming:'Checking loaded runtime',switches:'Set RAM boot switches',reset:'Press IWR RESET',loading:'Loading temporary firmware',next:'Prepare next attempt',preparing_attempt:'Preparing attempt',learning_background:'Learning the empty hitting area',place_ball:'Place the ball',preparing_sensors:'Preparing OPS and camera',armed:'Armed — IWR candidate only',candidate_lost:'IWR candidate lost',pausing:'Stopping attempt',stopping:'Stopping attempt',paused:'Attempt paused',ending:'Ending session',saving:'Saving captures',stopped:'Stopped',failed:'Session stopped with an error',finished:'Finished'};
 const controls={switches:['switches_set','Switches set; RESET not pressed'],reset:['reset_pressed','RESET pressed; waited at least one second'],next:['next','Prepare next attempt']};
 const terminal=['idle','stopped','failed','finished'];
 function stateKey(){return JSON.stringify([state.session_id,state.phase,state.phase_token,Boolean(state.normal_boot_restore_needed)]);}
 function timeoutSeconds(){return state.job?.timeout_s===null?null:Number.isFinite(state.job?.timeout_s)?state.job.timeout_s:3600;}
 function deadline(){const start=Date.parse(state.job?.started_at),seconds=timeoutSeconds();return seconds!==null&&Number.isFinite(start)?start+seconds*1000:null;}
-function phaseNow(){if(state.job?.action==='internal_sync'){if(state.job.state==='error')return 'failed';if(['stopped','complete'].includes(state.job.state)&&!terminal.includes(state.phase))return 'stopped';}return state.phase||'idle';}
-function paused(){return (state.attempts||[]).length>=3||(state.attempts||[]).slice(1).some(item=>item.status!=='captured_unqualified'||item.error);}
+function triggerObserved(){return state.iwr?.trigger?.latched==='1'||state.iwr?.trigger_observed===true;}
+function currentCandidate(){const iwr=state.iwr,b=iwr?.ball,bins=state.iwr_capture_plan?.trigger_bins,index=Number(b?.bin);return iwr?.capture?.active==='1'&&iwr?.trigger?.enabled==='1'&&b?.state==='locked'&&b.follow==='1'&&b.reason==='none'&&Number.isInteger(index)&&index>0&&(!bins||(index>=bins[0]&&index<=bins[1]))&&!iwr.candidate_loss;}
+function ownerLive(){return state.job?.action==='internal_sync'&&state.job.state==='running';}
+function phaseNow(){if(state.job?.action==='internal_sync'){if(state.job.state==='error')return 'failed';if(['stopped','complete'].includes(state.job.state)&&!terminal.includes(state.phase))return 'stopped';}if(!ownerLive()&&!terminal.includes(state.phase))return 'owner_unavailable';if(pendingCommand==='end')return 'ending';if(pendingCommand==='stop')return 'pausing';if(['armed','candidate_lost'].includes(state.phase))return triggerObserved()?'armed':state.phase==='candidate_lost'||!currentCandidate()?'candidate_lost':'armed';return state.phase||'idle';}
+function completedAttempts(){return (state.attempts||[]).filter(item=>item.aborted!==true);}
+function plannedIndex(){return Number.isInteger(state.planned_activity_index)&&state.planned_activity_index>0?state.planned_activity_index:completedAttempts().length+1;}
+function reviewPaused(){const done=completedAttempts();return done.length>=3||done.some((item,index)=>(item.planned_activity_index||index+1)>1&&(item.status!=='captured_unqualified'||item.error));}
 function guide(phase){
- const count=(state.attempts||[]).length, dry=count===0, activity=dry?'dry swing — ball stays put':'real strike';
- if(phase==='next'&&paused())return ['Pause here — review the saved files.',count>=3?'Three planned attempts are saved. The first two strikes need review before a larger block. Keep powered and leave this session waiting for review.':'A planned strike has partial/error evidence. Preserve it and pause for review; do not keep retrying.'];
- if(phase==='next')return ['Remove the ball; leave the lane empty.',(count===1&&state.attempts[0].status!=='captured_unqualified'?'Dry-swing partial/timeout retained; it can be useful. ':'')+'Once assembled, tap Prepare for '+activity+'. Do not put the ball back until asked. Then wait for Armed.'];
+ const count=completedAttempts().length, dry=plannedIndex()===1, activity=dry?'dry swing — ball stays put':'real strike';
+ if(phase==='owner_unavailable')return ['Session owner unavailable — do not swing.','The loaded state cannot be verified. Preserve files and wait for current session status. Do not press RESET or start another attempt.'];
+ if(['next','paused'].includes(phase)&&reviewPaused())return ['Pause here — review the saved files.',count>=3?'Three planned attempts are saved. The first two strikes need review before a larger block. Keep powered and leave this session waiting for review.':'A planned strike has partial/error evidence. Preserve it and pause for review; do not keep retrying.'];
+ if(phase==='next')return ['Remove the ball; leave the lane empty.',(count===1&&completedAttempts()[0].status!=='captured_unqualified'?'Dry-swing partial/timeout retained; it can be useful. ':'')+'Once assembled, tap Prepare for '+activity+'. Do not put the ball back until asked. Then wait for Armed.'];
+ if(phase==='preparing_attempt')return ['Preparing this attempt — do not swing.','Keep the lane empty and stay still. Wait for the ball-placement and Armed instructions.'];
  if(phase==='learning_background')return ['Keep the lane empty. Do not swing.','Ball out; stand clear while the IWR learns the background.'];
  if(phase==='place_ball')return ['Place the ball, then stay still.','Wait for Armed before the '+activity+'.'];
- if(phase==='preparing_sensors')return ['Stay still. Do not swing yet.','The ball is locked; OPS and camera are preparing. Wait for Armed.'];
- if(phase==='armed'&&state.iwr?.trigger?.latched==='1')return ['Hold still — trigger observed.','Do not swing again. Wait while capture completes and the original files are saved.'];
- if(phase==='armed')return [dry?'One dry swing — do not hit the ball.':'Make one real strike now.',dry?'Within 30 seconds, swing past the ball so it stays put. One swing only; wait for saving or timeout.':'Within 30 seconds, make one strike only. Then wait for saving; do not swing again.'];
+ if(phase==='preparing_sensors')return ['Stay still. Do not swing yet.','IWR reported a candidate, not verified ball presence. OPS and camera are preparing. Wait for Armed.'];
+ if(phase==='candidate_lost')return ['Candidate lost — do not swing.','Hold still. Any capture already in progress can finish within the finite wait. Do not retry or press RESET.'];
+ if(['pausing','stopping'].includes(phase))return ['Hold still — stopping this attempt.','Do not swing. Wait for the pause check; Retry appears only when the loaded session reports it is safe.'];
+ if(phase==='paused')return ['Attempt paused — do not swing.',state.retry_available===true?'Remove the ball and leave the lane empty. Tap Retry for the same planned '+activity+', or End session.':(state.retry_reason||'Retry is not available until the session verifies a safe pause.')+' Do not retry or press RESET.'];
+ if(phase==='ending')return ['Hold still — ending the session.','Do not swing or press RESET. Wait for the session to close and show normal-boot restoration guidance.'];
+ if(phase==='armed'&&triggerObserved())return ['Hold still — trigger observed.','Do not swing again. Wait while capture completes and the original files are saved.'];
+ if(phase==='armed')return [dry?'One dry swing — do not hit the ball.':'Make one real strike now.',(dry?'Within 30 seconds, swing past the ball so it stays put. One swing only; wait for saving or timeout.':'Within 30 seconds, make one strike only. Then wait for saving; do not swing again.')+' IWR candidate only; ball presence is not independently verified.'];
  if(phase==='saving')return ['Hold still — saving original files.','Do not swing or press RESET. Wait for the next instruction.'];
  if(phase==='resuming')return ['Stay still — checking the loaded runtime.','No upload or RESET. Wait for Prepare, then follow the empty-lane instructions.'];
  if(terminal.includes(phase)&&state.resume_available===true)return ['Resume can check the loaded session.','Keep IWR power and USB connected; do not press RESET. Tap Resume to check the existing RAM runtime. No swing until Prepare and Armed.'];
@@ -58,37 +71,41 @@ function guide(phase){
 }
 function link(label,name){const a=document.createElement('a');a.textContent=label;a.href='/api/tester/internal-sync/file/'+encodeURIComponent(state.session_id)+'/'+name.split('/').map(encodeURIComponent).join('/');a.download=name.split('/').at(-1);return a;}
 function render(){
- if(pending&&pending!==stateKey()){pending=null;pendingCommand=null;commandError='';}
+ if(pending&&pending!==stateKey()&&(!['stop','end'].includes(pendingCommand)||terminal.includes(state.phase)||pendingCommand==='stop'&&state.phase==='paused'||JSON.parse(pending)[0]!==state.session_id)){pending=null;pendingCommand=null;interruptionRefused=false;commandError='';}
  const phase=phaseNow(),action=controls[phase],fresh=connected&&Date.now()-lastStatus<4000,end=deadline(),expired=end!==null&&Date.now()>=end;
  const [instruction,message]=guide(phase);
- byId('phase').textContent=!fresh?'Status unavailable':expired&&!terminal.includes(phase)?'Session time limit reached':phase==='armed'&&state.iwr?.trigger?.latched==='1'?'Trigger observed — waiting for capture':phases[phase]||phase;
+ byId('phase').textContent=!fresh?'Status unavailable':expired&&!terminal.includes(phase)?'Session time limit reached':phase==='armed'&&triggerObserved()?'Trigger observed — waiting for capture':phases[phase]||phase;
  byId('instruction').textContent=!fresh?'Status unavailable — do not swing.':expired&&!terminal.includes(phase)?'Session time limit reached — do not swing.':instruction;
  byId('message').textContent=!fresh?'Do not swing or repeat Prepare. Keep files and power; wait for fresh session status.':expired&&!terminal.includes(phase)?'No further attempts. Preserve files and wait for stopped status; restart needs physical switch/RESET access.':message;
- byId('progress').textContent='Session '+(state.session_id?state.session_id.slice(0,8):'not loaded')+' · '+(state.attempts||[]).length+' saved · '+((state.attempts||[]).length<3?'Planned slot '+((state.attempts||[]).length+1)+' of 3':'Review pause');
+ byId('progress').textContent='Session '+(state.session_id?state.session_id.slice(0,8):'not loaded')+' · '+(state.attempts||[]).length+' saved · '+(plannedIndex()<=3?'Planned slot '+plannedIndex()+' of 3':'Review pause');
  byId('connection').textContent=!fresh?'Connection unavailable or stale. Controls locked; waiting for fresh status.':pending?'Command sent; waiting for the session to advance.':'Status connected';
  byId('error').textContent=commandError||statusError;
  byId('deadline').textContent=timeoutSeconds()===null?'No overall session expiry. Each attempt still has finite capture limits; manual Stop is available while running.':end===null?'Session deadline unavailable. Older runners use a one-hour limit.':expired?'Session time limit reached. Preserve files; a new RAM load needs switch/RESET access.':'Session limit: '+Math.ceil((end-Date.now())/60000)+' min left; ends '+new Date(end).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})+'. Each attempt also has finite capture limits.';
  byId('setup').textContent=state.configured?'Camera: 640×400, 300 fps requested, 300 µs exposure requested, gain 4. Sound GPIO is not used.':'Enable this experiment by starting the tester with --internal-sync-clock-package and the reviewed firmware package.';
  byId('start').hidden=Boolean(state.session_id);byId('start').disabled=!fresh||busy||Boolean(pending)||!state.configured||phase!=='idle'||Boolean(state.normal_boot_restore_needed);
- byId('confirm').hidden=!action;byId('confirm').disabled=!fresh||busy||Boolean(pending)||expired||(phase==='next'&&paused());byId('confirm').textContent=phase==='next'?(paused()?'Paused for review':(state.attempts||[]).length===0?'Prepare dry swing':'Prepare real strike'):action?action[1]:'Confirm';
- byId('stop').disabled=!fresh||busy||pendingCommand==='stop'||terminal.includes(phase);
+ byId('confirm').hidden=!action;byId('confirm').disabled=!fresh||!ownerLive()||busy||Boolean(pending)||expired||(phase==='next'&&reviewPaused());byId('confirm').textContent=phase==='next'?(reviewPaused()?'Paused for review':plannedIndex()===1?'Prepare dry swing':'Prepare real strike'):action?action[1]:'Confirm';
+ byId('retry').hidden=phase!=='paused';byId('retry').disabled=!fresh||!ownerLive()||busy||Boolean(pending)||expired||state.retry_available!==true||reviewPaused();byId('retry').textContent=plannedIndex()===1?'Retry dry swing':'Retry real strike';
+ byId('stop').disabled=!fresh||!ownerLive()||busy||pendingCommand==='end'||pendingCommand==='stop'&&!interruptionRefused||terminal.includes(phase)||phase==='paused';
+ byId('end').hidden=terminal.includes(phase);byId('end').disabled=!fresh||!ownerLive()||busy||pendingCommand==='end'&&!interruptionRefused||terminal.includes(phase);
  byId('resume').hidden=state.resume_available!==true||!terminal.includes(phase);byId('resume').disabled=!fresh||busy||Boolean(pending);
  byId('restored').disabled=!fresh||busy||Boolean(pending);
  byId('restore').hidden=!(state.normal_boot_restore_needed&&state.resources_released);
  byId('restore-message').textContent=state.restore_instructions||'';
  const iwr=state.iwr;
- byId('sensors').textContent=iwr?'IWR: '+iwr.capture.active+' active; detector '+iwr.trigger.enabled+'; latched '+iwr.trigger.latched+'; ball '+iwr.ball.state+' at bin '+iwr.ball.bin+'. OPS and camera arm after this attempt’s ball lock.':'No live IWR state yet.';
+ byId('sensors').textContent=iwr?'IWR: '+iwr.capture?.active+' active; detector '+iwr.trigger?.enabled+'; latched '+iwr.trigger?.latched+'; candidate '+iwr.ball?.state+' at bin '+iwr.ball?.bin+'. Ball presence is not independently verified.':'No live IWR state yet.';
  byId('raw').textContent=JSON.stringify(state,null,2);
  const list=byId('attempts'),key=JSON.stringify([state.session_id,state.attempts]);
  if(key===attemptsKey)return;attemptsKey=key;list.replaceChildren();
- for(const [index,item] of (state.attempts||[]).entries()){const row=document.createElement('div');row.className='attempt';const title=document.createElement('strong');title.textContent=item.name+' · '+(index===0?'Planned dry swing':index<3?'Planned strike':'Additional attempt')+' · '+(item.status==='captured_unqualified'?'Files captured · unqualified':'Partial capture');row.append(title);if(item.error){const p=document.createElement('p');p.textContent=item.error;row.append(p);}row.append(document.createElement('br'),link('Attempt record',item.name+'/RESULT.json'));if(item.iwr_shot_id)row.append(link('IWR held result',item.name+'/iwr-held.json'),link('IWR raw dump',item.name+'/iwr-dump.bin'));for(const clip of item.camera?.clips||[])row.append(link('Camera timing',item.name+'/ops-camera/'+clip.metadata),link('Camera frames',item.name+'/ops-camera/'+clip.metadata.replace(/metadata\.json$/,'frames.npz')));list.append(row);}
+ for(const [index,item] of (state.attempts||[]).entries()){const slot=item.planned_activity_index||index+1,row=document.createElement('div');row.className='attempt';const title=document.createElement('strong');title.textContent=item.name+' · '+(slot===1?'Planned dry swing':slot<=3?'Planned strike':'Additional attempt')+' · '+(item.aborted===true?'Stopped attempt · partial files retained':item.status==='captured_unqualified'?'Files captured · unqualified':'Partial capture');row.append(title);if(item.error){const p=document.createElement('p');p.textContent=item.error;row.append(p);}row.append(document.createElement('br'),link('Attempt record',item.name+'/RESULT.json'));if(item.iwr_shot_id)row.append(link('IWR held result',item.name+'/iwr-held.json'),link('IWR raw dump',item.name+'/iwr-dump.bin'));for(const clip of item.camera?.clips||[])row.append(link('Camera timing',item.name+'/ops-camera/'+clip.metadata),link('Camera frames',item.name+'/ops-camera/'+clip.metadata.replace(/metadata\.json$/,'frames.npz')));list.append(row);}
 }
 async function refresh(){if(refreshing)return;refreshing=true;try{const response=await fetch('/api/tester/internal-sync',{cache:'no-store',signal:AbortSignal.timeout(3000)});if(!response.ok)throw Error('Status request failed');state=await response.json();lastStatus=Date.now();connected=true;statusError='';}catch(error){connected=false;statusError=error.message;}finally{refreshing=false;render();}}
-async function post(path,payload){if(busy||!connected||Date.now()-lastStatus>=4000||(pending&&(payload.command!=='stop'||pendingCommand==='stop')))return;busy=true;pending=stateKey();pendingCommand=payload.command||path;commandError='';render();try{const response=await fetch('/api/tester/internal-sync/'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:AbortSignal.timeout(3000)});const result=await response.json();if(!response.ok){pending=null;pendingCommand=null;throw Error(result.error||'Request failed');}await refresh();}catch(error){commandError=error.message+' — command response uncertain or refused; wait for current status. Do not repeat Prepare or Resume.';}finally{busy=false;render();}}
+async function post(path,payload){if(busy||!connected||Date.now()-lastStatus>=4000||(pending&&!(payload.command==='end'&&(pendingCommand!=='end'||interruptionRefused)||payload.command==='stop'&&(!['stop','end'].includes(pendingCommand)||pendingCommand==='stop'&&interruptionRefused))))return;busy=true;pending=stateKey();pendingCommand=payload.command||path;interruptionRefused=false;commandError='';render();try{const response=await fetch('/api/tester/internal-sync/'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:AbortSignal.timeout(3000)});const result=await response.json();if(!response.ok){if(['stop','end'].includes(pendingCommand))interruptionRefused=true;else{pending=null;pendingCommand=null;}throw Error(result.error||'Request failed');}await refresh();}catch(error){commandError=error.message+' — command response uncertain or refused; wait for current status. Do not repeat Prepare, Resume or Retry.';}finally{busy=false;render();}}
 byId('start').onclick=()=>post('start',{});
 byId('resume').onclick=()=>post('resume',{phase_token:state.phase_token});
 byId('confirm').onclick=()=>post('command',{command:controls[state.phase]?.[0],phase_token:state.phase_token});
 byId('stop').onclick=()=>post('command',{command:'stop',phase_token:state.phase_token});
+byId('retry').onclick=()=>post('command',{command:'retry',phase_token:state.phase_token});
+byId('end').onclick=()=>post('command',{command:'end',phase_token:state.phase_token});
 byId('restored').onclick=()=>post('command',{command:'restored',phase_token:state.phase_token});
 let drag=null,suppressClick=false;
 const main=document.querySelector('main');

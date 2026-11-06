@@ -39,9 +39,9 @@ def _command(files, command, token=None):
         )
 
 
-@pytest.mark.parametrize("late_command", ["next", "stop"])
+@pytest.mark.parametrize("late_command", ["next", "end"])
 @pytest.mark.parametrize("stale_command", ["next", "stop"])
-def test_stopped_session_waits_past_900_seconds_for_owned_next_or_stop(
+def test_stopped_session_waits_past_900_seconds_for_owned_next_or_end(
     tmp_path, monkeypatch, session_tools, late_command, stale_command
 ):
     tools, clock = session_tools
@@ -58,11 +58,11 @@ def test_stopped_session_waits_past_900_seconds_for_owned_next_or_stop(
             if clock.now == 901:
                 _command(files, stale_command, "previous-phase-token")
             else:
-                _command(files, late_command if clock.now == 1802 else "stop")
+                _command(files, late_command if clock.now == 1802 else "end")
 
         clock.tick = operator
         try:
-            yield object()
+            yield SimpleNamespace()
         finally:
             events.append("runtime closed")
 
@@ -106,7 +106,7 @@ def test_attempt_failure_does_not_enter_another_idle_wait(
     def stopped_runtime(_package, files, **_kwargs):
         clock.tick = lambda: _command(files, "next")
         try:
-            yield object()
+            yield SimpleNamespace()
         except BaseException:
             files.publish("failed")
             raise
