@@ -69,6 +69,12 @@ For a dry swing, place the ball normally and swing without striking it.
 Saved files include `iwr-held.json`, `iwr-result.bin`, `iwr-clock.bin`,
 `iwr-dump.bin`, the original UART journals, OPS capture evidence, GPIO edges,
 camera frame clocks, `frames.npz`, metadata and per-attempt `RESULT.json`.
+Each attempt result also retains full or partial unsolicited IWR notice replies
+in `iwr_notices`, with raw base64 bytes, read times and errors. Its
+`iwr_notice_start_index` maps local rows to the session-wide `notice_read_index`
+in a trigger observation. Session cleanup and pause/retry checkpoints save the
+complete journal as `iwr-notices.json`, including notices before the first attempt.
+These timestamps describe host byte receipt, not physical trigger or contact time.
 The page downloads these records without leaving the guide. “Captured” requires both radar captures and
 one saved camera array with matching event ownership and frame clocks. It
 does not establish that independent triggers selected the same physical event.

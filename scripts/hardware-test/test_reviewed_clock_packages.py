@@ -92,6 +92,7 @@ def test_native_runtime_collector_uses_the_selected_firmware_identity(tmp_path, 
 
     class Collector:
         rows = []
+        notice_rows = []
         state = {}
 
         def __init__(self, _handle, **kwargs):

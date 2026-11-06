@@ -344,6 +344,7 @@ def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None
     previous_metadata = frozenset((camera_root / "camera").rglob("metadata.json"))
     cancelled = cancelled or files.cancelled
     row_start = len(collector.rows)
+    notice_start = len(collector.notice_rows)
     try:
         if files.cooperative:
             files.cancelled()
@@ -482,6 +483,8 @@ def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None
                     camera_root, rig, previous_metadata=previous_metadata
                 )
             result["iwr_exchanges"] = collector.rows[row_start:]
+            result["iwr_notice_start_index"] = notice_start
+            result["iwr_notices"] = collector.notice_rows[notice_start:]
             result["iwr_lifecycle"] = dict(collector.state)
             result["finished_mono_ns"] = time.monotonic_ns()
             if (
@@ -668,6 +671,9 @@ def open_runtime(package, files, *, capture_plan=iwr_capture_plan.DEFAULT, resum
             files.state["resume_kernel"] = kernel
         if collector is not None:
             (output / "iwr-exchanges.json").write_text(json.dumps(collector.rows, indent=2) + "\n")
+            (output / "iwr-notices.json").write_text(
+                json.dumps(collector.notice_rows, indent=2) + "\n"
+            )
             files.state["iwr_lifecycle"] = collector.state
         files.publish(
             files.state["phase"],
@@ -701,6 +707,9 @@ def wait_retry(collector, files, result=None):
             stream.write(json.dumps(proof, indent=2) + "\n")
         (files.folder / "iwr-exchanges.json").write_text(
             json.dumps(collector.rows, indent=2) + "\n"
+        )
+        (files.folder / "iwr-notices.json").write_text(
+            json.dumps(collector.notice_rows, indent=2) + "\n"
         )
         if collector.failed or (
             collector.state["rf_start_attempted"] and not collector.state["stop_verified"]

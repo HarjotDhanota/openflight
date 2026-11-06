@@ -357,6 +357,28 @@ def test_cooperative_stop_mid_reply_retry_and_end_keep_one_runtime_and_original_
     assert len(list((tmp_path / "session/control-proofs").glob("*-retry.json"))) == 1
 
 
+def test_pause_checkpoint_persists_notice_journal_before_operator_wait(
+    tools, parser, tmp_path, monkeypatch
+):
+    collector, port = parser
+    port.pending = b"Triggered\r\n"
+    collector.wait_notice(0.05)
+    collector.begin()
+    collector.finish()
+    files = tools.SessionFiles(tmp_path, cooperative=True)
+    files.publish("stopping", attempt_number=1)
+
+    def wait(_expected):
+        saved = json.loads((tmp_path / "iwr-notices.json").read_text())
+        assert saved == collector.notice_rows
+        assert saved[0]["received_b64"] == "VHJpZ2dlcmVkDQo="
+        raise tools.SessionEnded("end after persisted pause")
+
+    monkeypatch.setattr(files, "wait", wait)
+    with pytest.raises(tools.SessionEnded, match="persisted pause"):
+        tools.wait_retry(collector, files)
+
+
 @pytest.mark.parametrize("change", ["reset", "held", "post", "freeze"])
 def test_retry_proof_is_fresh_and_refuses_changed_paused_runtime_before_rf(
     tools, parser, tmp_path, monkeypatch, change

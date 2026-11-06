@@ -48,7 +48,7 @@ def sequence(tmp_path, monkeypatch):
         outcomes = {}
 
         def __init__(self):
-            self.rows, self.state = [], {}
+            self.rows, self.notice_rows, self.state = [], [], {}
 
         def begin(self):
             if self.failed:

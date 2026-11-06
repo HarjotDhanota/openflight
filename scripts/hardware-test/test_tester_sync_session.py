@@ -1,11 +1,153 @@
 """Operator phase identity and actual saved camera evidence checks."""
 
+import base64
 import json
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 from tester_sync_session import SessionFiles, camera_evidence
+
+
+@pytest.mark.parametrize("error_type", [None, OSError, KeyboardInterrupt])
+def test_attempt_persists_full_or_interrupted_notice_with_global_index(
+    tmp_path, monkeypatch, error_type
+):
+    import threading
+
+    import joint_clock_rig
+    import tester_sync_session as session
+    from test_iwr_early_notification import deliver_notice_after
+    from test_joint_shot_clock import wire
+
+    from openflight.camera import capture_runtime
+
+    collector, port = wire(1)
+    port.pending = b"Triggered\r\n"
+    collector.wait_notice(0.05)
+    original_wait = collector.wait_result
+
+    def wait_result(publish, cancelled, *, on_trigger):
+        def triggered(event):
+            port.complete_shot()
+            on_trigger(event)
+
+        return original_wait(publish, cancelled, on_trigger=triggered)
+
+    class Rig:
+        arm_id, boot_id, native_capture = "arm", "synthetic-boot", False
+        trace_attempt_id = "notice-retention"
+
+        def __init__(self, **_kwargs):
+            self.stop = threading.Event()
+
+        def prepare(self):
+            pass
+
+        def start_wait(self):
+            deliver_notice_after(port, 1)
+            original = port.read
+
+            def read(count):
+                if error_type is not None and port.pending == b"riggered\n":
+                    raise error_type("interrupted notice")
+                return original(count)
+
+            port.read = read
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(joint_clock_rig, "RigControl", Rig)
+    monkeypatch.setattr(capture_runtime, "CameraCaptureRuntime", lambda **_kwargs: object())
+    monkeypatch.setattr(collector, "wait_result", wait_result)
+    monkeypatch.setattr(collector, "read_raw_dump", lambda _radar: (b"raw", {"bytes": 3}))
+    files = SessionFiles(tmp_path)
+    folder = tmp_path / "attempt-001"
+    if error_type is None:
+        session.attempt(collector, files, folder)
+    else:
+        expected = error_type if error_type is KeyboardInterrupt else RuntimeError
+        with pytest.raises(expected):
+            session.attempt(collector, files, folder)
+    result = json.loads((folder / "RESULT.json").read_text())
+    assert result["iwr_notice_start_index"] == 1
+    assert result["iwr_notices"] == collector.notice_rows[1:]
+    row = result["iwr_notices"][0]
+    assert base64.b64decode(row["received_b64"]) == (b"T" if error_type else b"Triggered\n")
+    assert row["error"] == (error_type.__name__ if error_type else None)
+    assert row["reads"][0]["received_ns"] == row["notice_ns"]
+    if error_type is None:
+        observation = result["iwr_trigger_observation"]
+        assert observation["notice_read_index"] == result["iwr_notice_start_index"]
+        assert not observation["physical_timing_qualified"]
+        previous_bytes = (folder / "RESULT.json").read_bytes()
+        next_folder = tmp_path / "attempt-002"
+        session.attempt(collector, files, next_folder)
+        later = json.loads((next_folder / "RESULT.json").read_text())
+        assert later["iwr_notice_start_index"] == 2
+        assert later["iwr_notices"] == collector.notice_rows[2:]
+        assert later["iwr_trigger_observation"]["notice_read_index"] == 2
+        assert (folder / "RESULT.json").read_bytes() == previous_bytes
+
+
+@pytest.mark.parametrize("early_failure", [False, True])
+def test_runtime_exit_persists_notice_journal_before_any_attempt(
+    tmp_path, monkeypatch, early_failure
+):
+    import sys
+    from contextlib import nullcontext
+
+    import tester_sync_session as session
+    from test_joint_shot_clock import wire
+
+    collector, port = wire(1)
+    error = KeyboardInterrupt("interrupted before first attempt")
+
+    def observe():
+        port.pending = b"Triggered\n"
+        original = port.read
+
+        def read(count):
+            if early_failure and port.pending == b"riggered\n":
+                raise error
+            return original(count)
+
+        monkeypatch.setattr(port, "read", read)
+        collector.wait_notice(0.05)
+
+    monkeypatch.setattr(collector, "establish_fresh_runtime", observe)
+    monkeypatch.setitem(
+        sys.modules, "joint_shot_clock", SimpleNamespace(ShotCollector=lambda *_a, **_kw: collector)
+    )
+    helper = SimpleNamespace(
+        require_unowned=lambda: None,
+        enhanced_port=lambda: "fake-port",
+        IWR6843DeviceLock=lambda _port: nullcontext(),
+        open_serial=lambda _port: nullcontext(SimpleNamespace()),
+        RamOnlyLoader=lambda _handle: SimpleNamespace(load_ram=lambda _raw: None),
+        startup=lambda _handle: b"synthetic startup",
+        verify_package=lambda: {"source_fingerprint": collector.build},
+        boot_identity=lambda: "synthetic-boot",
+    )
+    monkeypatch.setattr(session, "load_package", lambda *_a, **_kw: helper)
+    monkeypatch.setattr(session, "resource_ownership", lambda: {"resources_released": True})
+    (tmp_path / "clock.ram.bin").write_bytes(b"synthetic RAM")
+    files = SessionFiles(tmp_path / "session")
+    monkeypatch.setattr(files, "wait", lambda _phase: None)
+    if early_failure:
+        with pytest.raises(KeyboardInterrupt) as caught:
+            with session.open_runtime(tmp_path, files):
+                pytest.fail("interrupted initialization must not yield a runtime")
+        assert caught.value is error
+    else:
+        with session.open_runtime(tmp_path, files):
+            pass
+    saved = json.loads((files.folder / "iwr-notices.json").read_text())
+    assert saved == collector.notice_rows
+    assert base64.b64decode(saved[0]["received_b64"]) == (b"T" if early_failure else b"Triggered\n")
+    assert saved[0]["error"] == ("KeyboardInterrupt" if early_failure else None)
+    assert files.state["attempts"] == []
 
 
 def test_old_operator_confirmation_cannot_advance_a_new_phase(tmp_path):
@@ -316,6 +458,7 @@ def test_selected_capture_plan_reaches_the_collector_and_the_session_header(
 
     class Collector:
         rows = []
+        notice_rows = []
         state = {}
 
         def __init__(self, _handle, **kwargs):
