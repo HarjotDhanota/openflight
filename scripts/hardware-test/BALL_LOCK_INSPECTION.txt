@@ -1,0 +1,51 @@
+Ball-lock inspection (CLI opt-in only)
+
+The tester_sync_session.py --inspect-ball-lock selection is an explicit stopped
+inspection. It never prepares camera/OPS, arms a trigger, or requests a swing.
+API, normal UI and native fusion retain their existing shot path; this flag is
+not yet exposed as a UI selection. Do not swing during an inspection.
+
+Read-only preflight (no devices opened):
+  uv run --no-sync scripts/hardware-test/tester_sync_session.py \
+    --clock-package PATH_TO_MATCHED_DIAGNOSTIC_PACKAGE --inspect-ball-lock
+
+The diagnostic manifest/image/source identity is pinned separately in
+run_joint_clock.DIAGNOSTIC_PACKAGES. The normal package and shot-dump allowlists
+are unchanged. Old normal packages cannot issue this binary command. The
+experimental package is refused by the normal session selection. Source-only
+research descriptors cannot qualify. --resume-zero-attempt is refused here.
+
+When an independently authorized execution adds --execute --output NEW_FOLDER,
+the existing SessionFiles switch/reset/Next controls and open_runtime UART owner
+are used. Each finite RF attempt learns background and stops immediately when
+the existing wait_ball callback first observes state=locked (including reason=gone),
+before further status commands or companion preparation. This is a host
+observation, not proof that the detector's first acquisition was retained.
+Faulty/inactive stats rejected before that callback remain in the journal and
+cannot produce a first-observed-lock claim. Timeout or operator Stop also
+exports when framing is known. Stop acknowledgment and verification precede
+export; firmware independently gates full quiescence. Unknown framing forbids
+recovery writes. Retry uses the existing explicit stopped-runtime safety proof;
+incompatible state refuses instead of inventing a resume path.
+
+Every attempt has a new attempt_id and a directory containing RESULT.json and
+iwr-exchanges.json. The ball-evidence subdirectory holds reply.bin (exact bytes,
+including partial replies on errors), exchange.json (write count/read times,
+owner/package identity/errors), decoded.json (strict raw float32 words) and
+coverage.json. Result status is diagnostic_saved_unqualified, never a captured
+shot; planned shot activity does not advance. Host receipt times are not sample
+or contact times. A failed stop or ambiguous exchange ends the session.
+
+Only source-derived canonical OFBLTR01 header/body + Done\nDone\nl3dump:/>
+framing is accepted. The 20-byte header is bounded before payload allocation;
+maximum complete reply is 15,739 bytes. No binary prompt search, CRLF
+normalization, flush, serial reconfiguration or retry occurs. Hardware console
+framing remains unvalidated; failure preserves evidence and poisons the owner.
+
+Coverage is initially structural/session-bound only. It reports current-context
+prefix, overwritten/discarded calls and starting locked state. It does not claim
+an independently verified transition. Run the separately pinned offline C
+analyzer against ball-evidence/reply.bin on a development host to establish
+checkpoint closure/retained transitions. No C/WSL compilation runs on the Pi.
+Physical ball identity, timing, target arithmetic parity and false-lock correction
+remain unqualified.

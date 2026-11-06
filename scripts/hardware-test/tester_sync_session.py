@@ -554,11 +554,15 @@ def resume_proof(package, files, capture_plan):
 
 
 @contextmanager
-def open_runtime(package, files, *, capture_plan=iwr_capture_plan.DEFAULT, resume=False):
+def open_runtime(
+    package, files, *, capture_plan=iwr_capture_plan.DEFAULT, resume=False, diagnostic=False
+):
     """One RAM boot and UART lease shared by standalone and normal fusion sessions."""
     from joint_shot_clock import ShotCollector
 
-    helper = load_package(package, shot_dumps=True)
+    if diagnostic and resume:
+        raise ValueError("Diagnostic inspection requires a fresh runtime; resume is unsupported")
+    helper = load_package(package, **({"diagnostic": True} if diagnostic else {"shot_dumps": True}))
     output = files.folder
     collector = None
     boot_restore_needed = resume
@@ -613,6 +617,14 @@ def open_runtime(package, files, *, capture_plan=iwr_capture_plan.DEFAULT, resum
                     sleep=time.sleep,
                     capture_plan=capture_plan,
                 )
+                if diagnostic:
+                    manifest_raw = (package / "MANIFEST.json").read_bytes()
+                    manifest = json.loads(manifest_raw)
+                    collector.diagnostic_binding = {
+                        "manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
+                        "source_fingerprint": manifest["source_fingerprint"],
+                        "ram_sha256": manifest["ram_sha256"],
+                    }
                 # the session header names the plan and every profile line it sends
                 files.publish(
                     "resuming" if resume else "loading",
@@ -743,12 +755,110 @@ def wait_retry(collector, files, result=None):
             return
 
 
-def run(package, output, *, capture_plan=iwr_capture_plan.DEFAULT, resume=False):
+def inspect_ball_lock(collector, files, folder):
+    """Stop on the first host-observed lock, before any shot preparation."""
+    from ball_lock_inspection import capture_stopped_evidence, eligible_binding
+
+    if (
+        not collector.fresh_runtime
+        or collector.failed
+        or not eligible_binding(getattr(collector, "diagnostic_binding", {}))
+        or collector.context is None
+        or collector.context.build != collector.diagnostic_binding["source_fingerprint"]
+    ):
+        raise ValueError("Inspection requires the explicitly selected fresh diagnostic runtime")
+
+    class ObservedLock(Exception):
+        """Exit wait_ball before its healthy-candidate guard or further commands."""
+
+    folder.mkdir(parents=True, exist_ok=False)
+    result = {
+        "diagnostic": True,
+        "captured_shot": False,
+        "name": folder.name,
+        "status": "diagnostic_failed",
+        "planned_activity": "inspect_detector_without_swing",
+        "session_id": files.state.get("session_id", files.folder.name),
+        "session_path": str(files.folder.resolve()),
+        "capture_policy": "stop_on_first_host_observed_lock",
+        "attempt_id": uuid.uuid4().hex,
+        "outcome": "failed",
+    }
+
+    def observe(phase, state):
+        files.publish(
+            phase, iwr=state, diagnostic=True, message="Ball-lock inspection; do not swing."
+        )
+        if state["ball"]["state"] == "locked":
+            row = collector.rows[-1]
+            result.update(
+                first_locked_state=deepcopy(state),
+                first_locked_stats_exchange_index=len(collector.rows) - 1,
+                first_locked_stats_received_b64=row["received_b64"],
+                first_locked_status_raw_sha256=hashlib.sha256(
+                    base64.b64decode(row["received_b64"])
+                ).hexdigest(),
+                first_locked_status_receive_monotonic_ns=row.get(
+                    "cli_ready_ns", row.get("after_ns")
+                ),
+                first_locked_host_observation_monotonic_ns=collector.now(),
+            )
+            raise ObservedLock()
+
+    try:
+        collector.begin()
+        collector.wait_ball(observe, files.cancelled)
+        raise RuntimeError("inspection wait returned without observing lock")
+    except ObservedLock:
+        result["outcome"] = "host_observed_lock"
+    except TimeoutError:
+        result["outcome"] = "timeout"
+    except AttemptStopped:
+        result.update(outcome="operator_stop", pause_requested=True)
+    except BaseException as error:
+        result.update(outcome="interrupted", error=repr(error))
+        raise
+    finally:
+        original = sys.exc_info()[0]
+        try:
+            with suspended_controls(collector):
+                result["stop_request_monotonic_ns"] = collector.now()
+                collector.finish()
+                result["stop_completion_monotonic_ns"] = collector.now()
+                files.publish(
+                    "saving", diagnostic=True, message="Saving stopped ball detector evidence."
+                )
+                result["evidence"] = capture_stopped_evidence(
+                    collector,
+                    collector.diagnostic_binding,
+                    folder / "ball-evidence",
+                    session_id=result["session_id"],
+                    session_path=result["session_path"],
+                    attempt_id=result["attempt_id"],
+                )
+                result["status"] = "diagnostic_saved_unqualified"
+        except BaseException as error:
+            result["cleanup_error"] = repr(error)
+            if original is None:
+                raise
+        finally:
+            result["iwr_lifecycle"] = deepcopy(collector.state)
+            (folder / "RESULT.json").write_text(json.dumps(result, indent=2) + "\n")
+            (folder / "iwr-exchanges.json").write_text(json.dumps(collector.rows, indent=2) + "\n")
+            files.state["attempts"].append(result)
+    return result
+
+
+def run(package, output, *, capture_plan=iwr_capture_plan.DEFAULT, resume=False, diagnostic=False):
     """The UI supplies real switch/RESET confirmations; upload is RAM-only."""
     files = SessionFiles(output, cooperative=True)
     files.state.update(planned_activity_index=1, cooperative_control=True, retry_available=False)
     try:
+        if diagnostic and resume:
+            raise ValueError("Diagnostic inspection does not support resume")
         options = {"resume": True} if resume else {}
+        if diagnostic:
+            options["diagnostic"] = True
         with open_runtime(package, files, capture_plan=capture_plan, **options) as collector:
             collector.command_boundary = files.cancelled
             index, retry, previous = 1, False, None
@@ -770,12 +880,13 @@ def run(package, output, *, capture_plan=iwr_capture_plan.DEFAULT, resume=False)
                     retry_available=False,
                     message="Preparing a fresh attempt; keep the lane empty and do not swing.",
                 )
-                previous = attempt(collector, files, output / f"attempt-{index:03d}")
+                selected_attempt = inspect_ball_lock if diagnostic else attempt
+                previous = selected_attempt(collector, files, output / f"attempt-{index:03d}")
                 if previous is None:
                     previous = {}
                 if previous.get("companion_error"):
                     raise RuntimeError("Companion cleanup failed; session cannot retry")
-                if not previous.get("aborted"):
+                if not diagnostic and not previous.get("aborted"):
                     files.state["planned_activity_index"] += 1
                 index += 1
                 retry = bool(previous.get("pause_requested"))
@@ -812,13 +923,23 @@ def main():
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--resume-zero-attempt", action="store_true")
     parser.add_argument(
+        "--inspect-ball-lock",
+        action="store_true",
+        help="Explicit diagnostic: stop on first host-observed lock; never arm a shot",
+    )
+    parser.add_argument(
         "--iwr-capture-plan",
         choices=iwr_capture_plan.names(),
         default=iwr_capture_plan.DEFAULT,
         help="IWR phaseCaptureCfg plan for the shot session (only the pre phase differs)",
     )
     args = parser.parse_args()
-    load_package(args.clock_package, shot_dumps=True)
+    if args.inspect_ball_lock and args.resume_zero_attempt:
+        parser.error("--inspect-ball-lock requires a fresh runtime; resume unsupported")
+    load_package(
+        args.clock_package,
+        **({"diagnostic": True} if args.inspect_ball_lock else {"shot_dumps": True}),
+    )
     if not args.execute:
         print(
             json.dumps(
@@ -827,6 +948,15 @@ def main():
                     "devices_opened": False,
                     "physical_timing_qualified": False,
                     "iwr_capture_plan": args.iwr_capture_plan,
+                    **(
+                        {
+                            "diagnostic": True,
+                            "capture_policy": "stop_on_first_host_observed_lock",
+                            "captured_shot": False,
+                        }
+                        if args.inspect_ball_lock
+                        else {}
+                    ),
                 }
             )
         )
@@ -839,6 +969,8 @@ def main():
 
     signal.signal(signal.SIGTERM, stop)
     options = {"resume": True} if args.resume_zero_attempt else {}
+    if args.inspect_ball_lock:
+        options["diagnostic"] = True
     run(
         args.clock_package.resolve(),
         args.output,

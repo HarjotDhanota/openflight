@@ -23,17 +23,26 @@ REVIEWED_PACKAGES = {
 # The older image's l3dump refuses a ring the self-trigger has already frozen, and the
 # host dumps only after capture stops, so only the freeze-safe image can retain shot dumps.
 SHOT_DUMP_PACKAGES = frozenset({"21f9d6c4d14b44b9d5ea0dbd23a8ba885dd1f49e52bcae04f92b4aab715d2573"})
+# Explicit diagnostic selection only; never part of either normal allowlist.
+DIAGNOSTIC_PACKAGES = {
+    "78bb8c3fcad35fe2156a9daa3c274370bd4cfacf0c8b6c2f10a8cc05565aa1b5": (
+        "dc2b3b42e2bf66e9da35328e71c659bc4da1e37d23ebea08480a7500fb5ecd97",
+        "fbd72d8ef2c48d231eb092d18578d6ea392e8d44fac2359cc99fb11b4b4c3a53",
+    ),
+}
 
 
-def load_package(folder, *, shot_dumps=False):
+def load_package(folder, *, shot_dumps=False, diagnostic=False):
     """Verify retained inputs before importing any of the device helpers."""
+    if diagnostic and shot_dumps:
+        raise ValueError("diagnostic inspection and normal shot dumps are separate modes")
     folder = folder.resolve(strict=True)
     manifest_bytes = (folder / "MANIFEST.json").read_bytes()
     digest = hashlib.sha256(manifest_bytes).hexdigest()
-    identity = REVIEWED_PACKAGES.get(digest)
+    identity = (DIAGNOSTIC_PACKAGES if diagnostic else REVIEWED_PACKAGES).get(digest)
     if identity is None:
         raise ValueError("expected sealed idle-package manifest")
-    if shot_dumps and digest not in SHOT_DUMP_PACKAGES:
+    if shot_dumps and not diagnostic and digest not in SHOT_DUMP_PACKAGES:
         raise ValueError("shot sessions need the freeze-safe reviewed package")
     manifest = json.loads(manifest_bytes)
     if (manifest["source_fingerprint"], manifest["ram_sha256"]) != identity:
