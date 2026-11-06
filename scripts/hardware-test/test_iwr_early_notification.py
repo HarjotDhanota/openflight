@@ -1,9 +1,11 @@
 """The first polled IWR latch is observable before the complete result, without a force."""
 
+import base64
 from copy import deepcopy
 
 import pytest
 from test_joint_shot_clock import dump_reader, wire
+from usb_collector import ExchangeError
 
 
 def capture_sequence(collector, port, states):
@@ -179,3 +181,100 @@ def test_unexpected_unsolicited_output_marks_the_connection_uncertain():
         collector.wait_result(lambda *_: None, lambda: False, on_trigger=lambda _e: None)
     assert collector.failed
     assert collector.notice_rows[-1]["error"] == "ValueError"
+
+
+@pytest.mark.parametrize("notice", [b"Triggered\n", b"Triggered\r\n"])
+def test_notice_accepts_every_fragmentation_and_keeps_first_byte_time(notice):
+    for mask in range(1 << (len(notice) - 1)):
+        collector, port = wire()
+        port.pending = notice
+        boundaries = [0] + [i for i in range(1, len(notice)) if mask & (1 << (i - 1))]
+        sizes = iter(b - a for a, b in zip(boundaries, boundaries[1:] + [len(notice)]))
+        original = port.read
+        port.read = lambda n: original(min(n, next(sizes)))
+        writes = list(port.writes)
+
+        received = collector.wait_notice(0.05)
+
+        row = collector.notice_rows[-1]
+        assert received == row["notice_ns"] == row["reads"][0]["received_ns"]
+        assert row["reads"][-1]["bytes_total"] == len(notice)
+        assert base64.b64decode(row["received_b64"]) == notice
+        assert row["error"] is None and not collector.failed and not port.pending
+        assert port.writes == writes
+
+
+@pytest.mark.parametrize(
+    "notice",
+    [b"Triggered\rX", b"Triggered\r\r\n", b"Triggered\nextra", b"Triggered\nTriggered\n"],
+)
+def test_malformed_extra_or_duplicate_notice_is_retained_and_refuses_commands(notice):
+    collector, port = wire()
+    port.pending = notice
+    writes = list(port.writes)
+    with pytest.raises(ExchangeError, match="unexpected unsolicited"):
+        collector.wait_notice(0.05)
+    assert collector.failed
+    assert base64.b64decode(collector.notice_rows[-1]["received_b64"]) == notice
+    with pytest.raises(ExchangeError, match="uncertain"):
+        collector.command("sensorStop")
+    assert port.writes == writes
+
+
+def test_incomplete_crlf_notice_times_out_with_original_bytes():
+    collector, port = wire()
+    port.pending = b"Triggered\r"
+    with pytest.raises(ExchangeError, match="incomplete unsolicited"):
+        collector.wait_notice(0.05)
+    row = collector.notice_rows[-1]
+    assert collector.failed and row["error"] == "TimeoutError"
+    assert base64.b64decode(row["received_b64"]) == b"Triggered\r"
+    assert row["after_ns"] >= row["notice_ns"] + 50_000_000
+
+
+@pytest.mark.parametrize("error_type", [KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("prefix", [b"", b"T", b"Triggered\r"])
+def test_notice_control_exception_poisoning_retains_raw_and_refuses_cleanup(error_type, prefix):
+    collector, port = wire()
+    chunks = iter([prefix] if prefix else [])
+    error = error_type("interrupted notice read")
+
+    def interrupted(_count):
+        chunk = next(chunks, None)
+        if chunk is None:
+            raise error
+        return chunk
+
+    port.read = interrupted
+    collector.state["rf_start_attempted"] = True
+    writes = list(port.writes)
+    with pytest.raises(error_type) as caught:
+        collector.wait_notice(0.05)
+    assert caught.value is error
+    row = collector.notice_rows[-1]
+    assert collector.failed and row["error"] == error_type.__name__
+    assert base64.b64decode(row["received_b64"]) == prefix
+    assert [read["bytes_total"] for read in row["reads"]] == ([len(prefix)] if prefix else [])
+    assert row["notice_ns"] == (row["reads"][0]["received_ns"] if prefix else None)
+    assert row["after_ns"] >= row["before_ns"]
+    collector.finish()
+    with pytest.raises(ExchangeError, match="uncertain"):
+        collector.exchange("stats")
+    assert port.writes == writes
+
+
+@pytest.mark.parametrize("error_type", [OSError, TimeoutError])
+def test_notice_read_failure_keeps_exchange_error_contract(error_type):
+    collector, port = wire()
+    error = error_type("notice read failed")
+
+    def failed_read(_count):
+        raise error
+
+    port.read = failed_read
+    with pytest.raises(ExchangeError, match="notice read failed") as caught:
+        collector.wait_notice(0.05)
+    assert caught.value.__cause__ is error
+    row = collector.notice_rows[-1]
+    assert collector.failed and row["error"] == error_type.__name__
+    assert row["received_b64"] == "" and row["reads"] == []

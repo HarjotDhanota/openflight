@@ -19,6 +19,7 @@ from openflight.camera.sync_resume import pristine_stats
 
 # The reviewed image queues this line the moment it latches (l3_dump.c "Triggered").
 NOTICE = b"Triggered\n"
+NOTICE_CRLF = b"Triggered\r\n"
 NOTICE_COMPLETION_NS = 50_000_000
 
 PROFILE = tuple(
@@ -315,10 +316,10 @@ class ShotCollector(ActiveCollector):
         deadline = row["before_ns"] + round(budget_s * 1e9)
         try:
             while True:
-                line = bytes(raw).replace(b"\r\n", b"\n")
-                if line == NOTICE:
+                line = bytes(raw)
+                if line in (NOTICE, NOTICE_CRLF):
                     return row["notice_ns"]
-                if not NOTICE.startswith(line):
+                if not (NOTICE.startswith(line) or NOTICE_CRLF.startswith(line)):
                     raise ValueError("unexpected unsolicited IWR output")
                 now = self.now()
                 if not raw and now >= deadline:
@@ -336,6 +337,10 @@ class ShotCollector(ActiveCollector):
             self.failed = True
             row["error"] = type(error).__name__
             raise ExchangeError(str(error)) from error
+        except BaseException as error:
+            self.failed = True
+            row["error"] = type(error).__name__
+            raise
         finally:
             row["after_ns"] = self.now()
             row["received_b64"] = base64.b64encode(raw).decode("ascii")
