@@ -46,6 +46,10 @@ def lifecycle_commands(plan=iwr_capture_plan.DEFAULT):
 TRIGGER_COMMANDS = trigger_commands()
 
 
+class CandidateUnavailable(ValueError):
+    """Known candidate loss before enable; retry still requires a verified safe stop."""
+
+
 class ShotCollector(ActiveCollector):
     """Fixed profile, observed ball lock, independent expected result identities.
 
@@ -194,16 +198,23 @@ class ShotCollector(ActiveCollector):
         if index not in self.trigger_bins:
             raise ValueError("observed ball outside retained profile")
         if (
+            ball["state"] not in {"off", "building", "waiting", "candidate", "locked"}
+            or ball["follow"] not in {"0", "1"}
+            or ball["reason"] not in {"none", "no_delta", "too_wide", "unstable", "gone"}
+            or (ball["state"] == "locked" and ball["reason"] not in {"none", "gone"})
+        ):
+            raise ValueError("invalid IWR ball candidate state contract")
+        if (
             ball["state"] != "locked"
             or ball["follow"] != "1"
             or ball["reason"] != "none"
             or int(ball["bin"]) != index
         ):
-            raise ValueError("IWR ball candidate is not a current healthy lock")
+            raise CandidateUnavailable("IWR ball candidate is not a current healthy lock")
         if previous is not None and any(
             ball[key] != previous[key] for key in ("locks", "releases", "window")
         ):
-            raise ValueError("IWR ball candidate lock epoch or window changed")
+            raise CandidateUnavailable("IWR ball candidate lock epoch or window changed")
 
     def _note_candidate_loss(self, state):
         """After enable, loss quiets guidance but cannot rule out a pending launch."""

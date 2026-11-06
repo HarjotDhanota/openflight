@@ -16,7 +16,12 @@ from run_joint_clock import load_package
 
 load_package(Path(os.environ["OPENFLIGHT_CLOCK_PACKAGE"]))
 from joint_clock_active import CONFIGURATION  # noqa: E402
-from joint_shot_clock import PROFILE, TRIGGER_COMMANDS, ShotCollector  # noqa: E402
+from joint_shot_clock import (  # noqa: E402
+    PROFILE,
+    TRIGGER_COMMANDS,
+    CandidateUnavailable,
+    ShotCollector,
+)
 from test_joint_clock_active import WIRE  # noqa: E402
 from usb_collector import ExchangeError  # noqa: E402
 
@@ -187,6 +192,30 @@ def test_loss_and_reacquisition_at_the_same_bin_does_not_reuse_an_old_lock():
     with pytest.raises(ValueError, match="(?i)ball|lock"):
         collector.arm(index)
     assert f"triggerCfg {index} 1 1\n".encode() not in port.writes[before:]
+
+
+@pytest.mark.parametrize("fault", ["gone", "epoch"])
+def test_pre_arm_candidate_loss_has_specific_recoverable_classification(fault):
+    collector, port = wire()
+    collector.begin()
+    index, _ = collector.wait_ball(lambda *_: None, lambda: False)
+    if fault == "gone":
+        port.ball_reason = "gone"
+    else:
+        port.ball_locks, port.ball_releases = 2, 1
+    with pytest.raises(ValueError) as error:
+        collector.arm(index)
+    assert type(error.value) is CandidateUnavailable
+
+
+def test_unknown_candidate_reason_remains_a_terminal_contract_error():
+    collector, port = wire()
+    collector.begin()
+    index, _ = collector.wait_ball(lambda *_: None, lambda: False)
+    port.ball_reason = "unknown_reason"
+    with pytest.raises(ValueError) as error:
+        collector.arm(index)
+    assert type(error.value) is ValueError
 
 
 def test_post_enable_candidate_loss_waits_quietly_then_stops_and_keeps_evidence(
