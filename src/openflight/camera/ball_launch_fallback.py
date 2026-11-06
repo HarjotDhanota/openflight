@@ -365,7 +365,7 @@ def track_launch_ball(  # pylint: disable=too-many-locals
     rest_px: Sequence[float],
     rest_diameter_px: float,
 ) -> list[TrackPoint]:
-    """The ball's blobs after impact: the longest straight run that starts from its rest."""
+    """The longest moving, straight blob run that starts near the resting ball."""
     count, height, width = frames.shape
     interval = float(np.median(np.diff(times_s))) if len(times_s) > 1 else 1.0 / 120.0
     start_bg = first_post_index - int(round(BACKGROUND_WINDOW_S[0] / interval))
@@ -402,6 +402,13 @@ def track_launch_ball(  # pylint: disable=too-many-locals
             track = _grow(
                 (frame, candidate), candidates, (rest_x, rest_y), count - 1, rest_diameter_px
             )
+            # Removing a dark part of the resting ball leaves a positive, stationary
+            # difference blob. Its persistence is not evidence of an outgoing ball.
+            if not any(
+                math.hypot(point["x"] - candidate["x"], point["y"] - candidate["y"]) >= near
+                for _frame, point in track[1:]
+            ):
+                continue
             if len(track) > len(best) or (
                 len(track) == len(best) and _straightness(track) < _straightness(best)
             ):
