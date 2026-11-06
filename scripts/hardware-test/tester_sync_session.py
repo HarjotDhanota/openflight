@@ -558,11 +558,11 @@ def open_runtime(
     package, files, *, capture_plan=iwr_capture_plan.DEFAULT, resume=False, diagnostic=False
 ):
     """One RAM boot and UART lease shared by standalone and normal fusion sessions."""
-    from joint_shot_clock import ShotCollector
-
     if diagnostic and resume:
         raise ValueError("Diagnostic inspection requires a fresh runtime; resume is unsupported")
     helper = load_package(package, **({"diagnostic": True} if diagnostic else {"shot_dumps": True}))
+    from joint_shot_clock import ShotCollector
+
     output = files.folder
     collector = None
     boot_restore_needed = resume
@@ -786,10 +786,20 @@ def inspect_ball_lock(collector, files, folder):
     }
 
     def observe(phase, state):
+        locked = state["ball"]["state"] == "locked"
         files.publish(
-            phase, iwr=state, diagnostic=True, message="Ball-lock inspection; do not swing."
+            "inspection_locked" if locked else phase,
+            iwr=state,
+            diagnostic=True,
+            message=(
+                "Inspection observed a polled lock; stopping to save evidence. Do not swing."
+                if locked
+                else "Inspection learning background; keep the lane empty and do not swing."
+                if phase == "learning_background"
+                else "Ball-lock inspection waiting for a polled lock; do not swing."
+            ),
         )
-        if state["ball"]["state"] == "locked":
+        if locked:
             row = collector.rows[-1]
             result.update(
                 first_locked_state=deepcopy(state),
@@ -826,7 +836,9 @@ def inspect_ball_lock(collector, files, folder):
                 collector.finish()
                 result["stop_completion_monotonic_ns"] = collector.now()
                 files.publish(
-                    "saving", diagnostic=True, message="Saving stopped ball detector evidence."
+                    "saving",
+                    diagnostic=True,
+                    message="Saving stopped inspection evidence; do not swing.",
                 )
                 result["evidence"] = capture_stopped_evidence(
                     collector,
@@ -852,8 +864,23 @@ def inspect_ball_lock(collector, files, folder):
 def run(package, output, *, capture_plan=iwr_capture_plan.DEFAULT, resume=False, diagnostic=False):
     """The UI supplies real switch/RESET confirmations; upload is RAM-only."""
     files = SessionFiles(output, cooperative=True)
-    files.state.update(planned_activity_index=1, cooperative_control=True, retry_available=False)
+    files.state.update(
+        mode="ball_lock_inspection" if diagnostic else "capture",
+        cooperative_control=True,
+        retry_available=False,
+        **(
+            {"diagnostic": True, "captured_shot": False}
+            if diagnostic
+            else {"planned_activity_index": 1}
+        ),
+    )
     try:
+        files.publish(
+            "starting",
+            message="Checking inspection package; do not swing."
+            if diagnostic
+            else "Checking firmware package and sensor ownership.",
+        )
         if diagnostic and resume:
             raise ValueError("Diagnostic inspection does not support resume")
         options = {"resume": True} if resume else {}
@@ -866,7 +893,9 @@ def run(package, output, *, capture_plan=iwr_capture_plan.DEFAULT, resume=False,
                 if not retry:
                     files.publish(
                         "next",
-                        message="Remove the ball, leave the hitting area empty, then prepare the next attempt.",
+                        message="Prepare another ball-lock inspection; keep the lane empty and do not swing."
+                        if diagnostic
+                        else "Remove the ball, leave the hitting area empty, then prepare the next attempt.",
                         attempt_number=index,
                         retry_available=False,
                     )
@@ -878,7 +907,9 @@ def run(package, output, *, capture_plan=iwr_capture_plan.DEFAULT, resume=False,
                     "preparing_attempt",
                     attempt_number=index,
                     retry_available=False,
-                    message="Preparing a fresh attempt; keep the lane empty and do not swing.",
+                    message="Preparing ball-lock inspection; keep the lane empty and do not swing."
+                    if diagnostic
+                    else "Preparing a fresh attempt; keep the lane empty and do not swing.",
                 )
                 selected_attempt = inspect_ball_lock if diagnostic else attempt
                 previous = selected_attempt(collector, files, output / f"attempt-{index:03d}")
@@ -892,7 +923,12 @@ def run(package, output, *, capture_plan=iwr_capture_plan.DEFAULT, resume=False,
                 retry = bool(previous.get("pause_requested"))
                 if retry:
                     wait_retry(collector, files, previous)
-            files.publish("finished", message="Session limit reached.")
+            files.publish(
+                "finished",
+                message="Inspection session limit reached; do not swing."
+                if diagnostic
+                else "Session limit reached.",
+            )
     except (InterruptedError, KeyboardInterrupt):
         kernel = files.state.get("resume_kernel")
         if (
@@ -914,6 +950,16 @@ def run(package, output, *, capture_plan=iwr_capture_plan.DEFAULT, resume=False,
                 runtime_retained=False,
                 message="Session ended. Original attempt records retained.",
             )
+    except Exception as error:
+        files.publish(
+            "failed",
+            error=repr(error),
+            retry_available=False,
+            message="Inspection failed; original evidence retained. Do not swing."
+            if diagnostic
+            else "Acquisition failed; original evidence retained.",
+        )
+        raise
 
 
 def main():

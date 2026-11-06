@@ -8748,6 +8748,7 @@ def create_app(
     tester_control_port: int = 8765,
     bind_host: str = "127.0.0.1",
     internal_sync_clock_package: Path | None = None,
+    internal_sync_diagnostic_package: Path | None = None,
     iwr_capture_plan: str = "default",
     package_manager: TesterJobManager | None = None,
     static_radar=None,
@@ -8962,6 +8963,7 @@ def create_app(
         InternalSyncController(
             root=sessions_root / "internal-sync",
             package=internal_sync_clock_package,
+            inspection_package=internal_sync_diagnostic_package,
             jobs=jobs,
             source=REPO_ROOT,
             release=release_for_internal_sync,
@@ -13250,6 +13252,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="TESTER CAPTURE ONLY: enable the reviewed RAM IWR + native OPS + camera experiment",
     )
     parser.add_argument(
+        "--internal-sync-diagnostic-package",
+        type=Path,
+        default=None,
+        help="INSPECTION ONLY: explicitly select the matched experimental ball-detector RAM package",
+    )
+    parser.add_argument(
         "--iwr-capture-plan",
         choices=capture_plan_names(),
         default="default",
@@ -13347,6 +13355,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             tester_control_port=args.port,
             bind_host=args.host,
             internal_sync_clock_package=clock_package,
+            internal_sync_diagnostic_package=args.internal_sync_diagnostic_package,
             iwr_capture_plan=args.iwr_capture_plan,
             ball_hint_model=args.ball_hint_model,
             ball_hint_independent=args.ball_hint_independent,

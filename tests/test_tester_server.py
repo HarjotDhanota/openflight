@@ -74,6 +74,26 @@ def reviewed_package(root):
     return package
 
 
+@pytest.mark.parametrize("normal_configured", [False, True])
+def test_inspection_package_is_explicit_and_separate_from_native_capture(
+    tmp_path, normal_configured
+):
+    normal = reviewed_package(tmp_path) if normal_configured else None
+    diagnostic = tmp_path / "diagnostic-package"
+    app = eligible_app(
+        sessions_root=tmp_path / "sessions",
+        internal_sync_clock_package=normal,
+        internal_sync_diagnostic_package=diagnostic,
+    )
+    controller = app.extensions["openflight_internal_sync"]
+    assert controller.package == normal
+    assert controller.inspection_package == diagnostic.resolve()
+    state = app.test_client().get("/api/tester/internal-sync").json
+    assert state["configured"] is normal_configured and state["inspection_configured"] is True
+    native = app.test_client().get("/api/tester/free-play/native-sync").json
+    assert native["configured"] is normal_configured
+
+
 SETUP_BALL_PX = {"x_px": 612.0, "y_px": 505.0, "diameter_px": 34.0}
 
 

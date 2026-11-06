@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import subprocess
 import sys
 import threading
 import uuid
@@ -16,6 +17,15 @@ from openflight.camera import iwr_capture_plan, sync_resume
 
 SESSION = re.compile(r"[a-f0-9]{32}")
 COMMANDS = {"switches": "switches_set", "reset": "reset_pressed", "next": "next", "paused": "retry"}
+MODES = ("capture", "ball_lock_inspection")
+ARTIFACTS = (
+    "RESULT.json",
+    "iwr-exchanges.json",
+    "ball-evidence/reply.bin",
+    "ball-evidence/exchange.json",
+    "ball-evidence/decoded.json",
+    "ball-evidence/coverage.json",
+)
 
 
 class InternalSyncController:
@@ -26,6 +36,7 @@ class InternalSyncController:
         *,
         root,
         package,
+        inspection_package=None,
         jobs,
         source,
         release,
@@ -36,6 +47,9 @@ class InternalSyncController:
         self.capture_plan = capture_plan
         self.root = Path(root).expanduser().resolve()
         self.package = Path(package).expanduser().resolve() if package else None
+        self.inspection_package = (
+            Path(inspection_package).expanduser().resolve() if inspection_package else None
+        )
         self.jobs, self.source, self.release = jobs, Path(source), release
         self.job_action = job_action
         self.lock = threading.Lock()
@@ -48,6 +62,8 @@ class InternalSyncController:
         """Read retained state; missing configuration never starts hardware."""
         state = {
             "configured": self.package is not None,
+            "inspection_configured": self.inspection_package is not None,
+            "mode": "capture",
             "session_id": self.session,
             "phase": "idle",
             "physical_timing_qualified": False,
@@ -94,10 +110,77 @@ class InternalSyncController:
                 )
             except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
                 state["resume_reason"] = str(error)
+            try:
+                state["mode"] = self.session_mode(state)
+            except (OSError, ValueError, TypeError, KeyError) as error:
+                state.update(
+                    mode="ball_lock_inspection",
+                    mode_error=str(error),
+                    phase="failed",
+                    retry_available=False,
+                    resume_available=False,
+                    message="Retained session mode is invalid; do not swing or retry.",
+                )
+            if state["mode"] == "ball_lock_inspection":
+                state.update(diagnostic=True, captured_shot=False, resume_available=False)
+                state.pop("planned_activity_index", None)
+            for attempt in state.get("attempts", []):
+                name = attempt.get("name", "")
+                attempt["artifacts"] = []
+                if not isinstance(name, str) or re.fullmatch(r"attempt-\d{3}", name) is None:
+                    continue
+                folder = path.parent / name
+                for artifact in ARTIFACTS:
+                    candidate = (folder / artifact).resolve()
+                    if candidate.is_relative_to(path.parent.resolve()) and candidate.is_file():
+                        attempt["artifacts"].append(artifact)
+        state["configured"] = self.package is not None
+        state["inspection_configured"] = self.inspection_package is not None
+        reason = self.start_reason(state)
+        state.update(
+            start_available=reason is None, start_reason=reason or "Ready for a fresh session."
+        )
         return state
+
+    def session_mode(self, state=None):
+        """Session selection survives worker status rewrites and server configuration changes."""
+        if self.session is None:
+            return "capture"
+        folder = self.root / self.session
+        metadata = folder / "session.json"
+        if state is None:
+            state = json.loads((folder / "status.json").read_text(encoding="utf-8"))
+        if metadata.exists():
+            mode = json.loads(metadata.read_text(encoding="utf-8"))["mode"]
+        else:
+            mode = (
+                "ball_lock_inspection" if state.get("diagnostic") else state.get("mode", "capture")
+            )
+        if mode not in MODES:
+            raise ValueError("Unknown retained session mode")
+        if mode == "capture" and state.get("diagnostic"):
+            raise ValueError("Retained capture mode conflicts with diagnostic worker state")
+        return mode
+
+    def start_reason(self, state):
+        """A fresh owner requires terminal state, released resources and restored boot."""
+        if self.jobs.status().get("state") == "running":
+            return "Stop the active tester action first"
+        if state.get("mode_error"):
+            return "Retained session mode is invalid"
+        if self.session:
+            if state.get("phase") not in {"stopped", "failed", "finished"}:
+                return "End the retained session first"
+            if state.get("normal_boot_restore_needed") is not False:
+                return "Restore normal IWR boot and confirm before starting again"
+            if state.get("resources_released") is not True:
+                return "Retained session resources have not been confirmed released"
+        return None
 
     def resume_proof(self):
         """Only server-selected retained files can authorize a device check."""
+        if self.session_mode() == "ball_lock_inspection":
+            raise ValueError("Inspection requires a fresh runtime; Resume is unavailable")
         if self.jobs.status().get("state") == "running":
             raise RuntimeError("A tester action is still running")
         if self.session is None or self.package is None:
@@ -144,14 +227,15 @@ class InternalSyncController:
             self.launch(session, folder, resume=True)
             return self.status()
 
-    def launch(self, session, folder, *, resume=False):
+    def launch(self, session, folder, *, resume=False, mode="capture"):
         """Publish one new owner before starting its fixed worker command."""
+        package = self.inspection_package if mode == "ball_lock_inspection" else self.package
         command = [
             sys.executable,
             "-B",
             str(self.source / "scripts/hardware-test/tester_sync_session.py"),
             "--clock-package",
-            str(self.package),
+            str(package),
             "--output",
             str(folder),
             "--execute",
@@ -160,23 +244,58 @@ class InternalSyncController:
         ]
         if resume:
             command.append("--resume-zero-attempt")
+        if mode == "ball_lock_inspection":
+            command.append("--inspect-ball-lock")
+        (folder / "session.json").write_text(
+            json.dumps({"mode": mode}, indent=2) + "\n", encoding="utf-8"
+        )
         self.session = session
         latest = self.root / "latest-session.tmp"
         latest.write_text(session + "\n", encoding="utf-8")
         latest.replace(self.root / "latest-session.txt")
         self.jobs.start("internal_sync", [command], folder / "session.log")
 
-    def start(self):
+    def start(self, mode="capture"):
         """Launch the reviewed script through the same owner as all tester actions."""
         with self.lock:
-            if self.package is None or not (self.package / "MANIFEST.json").is_file():
+            if mode not in MODES or (mode != "capture" and self.job_action != "internal_sync"):
+                raise ValueError("Unknown session mode")
+            package = self.inspection_package if mode == "ball_lock_inspection" else self.package
+            option = "diagnostic" if mode == "ball_lock_inspection" else "clock"
+            if package is None or not (package / "MANIFEST.json").is_file():
                 raise ValueError(
-                    "Start tester with --internal-sync-clock-package pointing to the reviewed clock package"
+                    f"Start tester with --internal-sync-{option}-package pointing to the reviewed {option} package"
                 )
-            if self.jobs.status().get("state") == "running":
-                raise RuntimeError("Stop the active tester action first")
-            if self.status().get("normal_boot_restore_needed"):
-                raise RuntimeError("Restore normal IWR boot and confirm before starting again")
+            reason = self.start_reason(self.status())
+            if reason:
+                raise RuntimeError(reason)
+            if mode == "ball_lock_inspection":
+                try:
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            "-B",
+                            str(self.source / "scripts/hardware-test/tester_sync_session.py"),
+                            "--clock-package",
+                            str(package),
+                            "--inspect-ball-lock",
+                            "--iwr-capture-plan",
+                            self.capture_plan,
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                except (OSError, subprocess.SubprocessError) as error:
+                    raise ValueError(f"Diagnostic package preflight failed: {error}") from error
+                if result.returncode != 0:
+                    raise ValueError(
+                        f"Diagnostic package preflight failed: {result.stderr[-2000:]}"
+                    )
+                reason = self.start_reason(self.status())
+                if reason:
+                    raise RuntimeError(reason)
             self.release()
             session = uuid.uuid4().hex
             folder = self.root / session
@@ -185,20 +304,30 @@ class InternalSyncController:
                 json.dumps(
                     {
                         "phase": "starting",
+                        "mode": mode,
+                        **(
+                            {"diagnostic": True, "captured_shot": False}
+                            if mode == "ball_lock_inspection"
+                            else {}
+                        ),
                         "attempts": [],
                         "physical_timing_qualified": False,
-                        "message": "Checking firmware package and sensor ownership.",
+                        "message": "Preparing ball-lock inspection; do not swing."
+                        if mode == "ball_lock_inspection"
+                        else "Checking firmware package and sensor ownership.",
                     }
                 )
                 + "\n"
             )
-            self.launch(session, folder)
+            self.launch(session, folder, mode=mode)
             return self.status()
 
     def command(self, command, token):
         """Only phase-specific confirmations and Stop can reach the worker."""
         with self.lock:
             state = self.status()
+            if state.get("mode_error") and command not in {"stop", "end"}:
+                raise RuntimeError("Retained session mode is invalid")
             if (
                 not self.session
                 or token != state.get("phase_token")
@@ -286,8 +415,13 @@ def register(app, controller, page):
 
     @app.post("/api/tester/internal-sync/start")
     def sync_start():
+        payload = request.get_json(silent=True) if request.get_data() else {}
+        if not isinstance(payload, dict):
+            return jsonify({"error": "JSON object required"}), 400
+        if set(payload) - {"mode"}:
+            return jsonify({"error": "Only a session mode is accepted"}), 409
         try:
-            return jsonify(controller.start()), 202
+            return jsonify(controller.start(payload.get("mode", "capture"))), 202
         except (ValueError, RuntimeError) as error:
             return jsonify({"error": str(error)}), 409
 
@@ -296,6 +430,8 @@ def register(app, controller, page):
         payload = request.get_json(silent=True)
         if not isinstance(payload, dict):
             return jsonify({"error": "JSON object required"}), 400
+        if set(payload) != {"command", "phase_token"}:
+            return jsonify({"error": "Only command and phase_token are accepted"}), 409
         try:
             return jsonify(controller.command(payload.get("command"), payload.get("phase_token")))
         except (ValueError, RuntimeError) as error:

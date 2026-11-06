@@ -19,6 +19,38 @@ uses this attempt's observed ball bin within the retained profile, not a fixed
 tee-distance assumption. Its RF run is finite (60 nominal seconds); placement
 and arming share a 50-second host budget and the armed wait is at most 30 seconds.
 
+The separate **Start ball-lock inspection** button is an explicit diagnostic
+selection. Configure it with `--internal-sync-diagnostic-package PATH` pointing
+to the separately allowlisted diagnostic package; the capture package does not
+enable it. `POST /api/tester/internal-sync/start` accepts
+`{"mode":"ball_lock_inspection"}`; the legacy empty payload still selects
+capture. Status exposes immutable `mode`, `inspection_configured` and
+`start_available`/`start_reason`. A running session never changes mode.
+After a terminal session, a new explicit start requires released resources and
+completed normal-boot restoration. Previous session files remain retained.
+
+During inspection, do not swing. Begin with an empty lane and stay still for
+the empty/still control, including after background learning. The first
+host-polled lock stops the radar and saves detector evidence before OPS/camera
+preparation. Timeout or Stop retains available evidence. A later deliberate
+placement check can add a ball after background learning finishes; the software
+does not verify either physical condition. This is a saved detector trace,
+not verified ball presence, a captured shot, or a false-lock correction.
+No normal three-activity plan or swing invitation appears in diagnostic mode.
+No RESET is needed between inspections while the same loaded owner stays open.
+Explicit Next/Retry keeps the existing safe-stop checks and creates a new raw
+attempt directory; inspection does not advance planned shot slots. Diagnostic
+Resume after closure is unsupported. End and restoration remain separate.
+
+Inspection attempts report `diagnostic_saved_unqualified` or a failed/partial
+inspection with the observed outcome (`host_observed_lock`, `timeout`, or
+`operator_stop`). Downloads include only files observed on disk: `RESULT.json`,
+`iwr-exchanges.json`, and `ball-evidence/reply.bin`, `exchange.json`,
+`decoded.json`, `coverage.json`. Failed exports can retain only partial reply
+bytes and exchange records. Missing links do not establish export completeness.
+Coverage remains structural/session-bound until the pinned offline C analyzer
+checks retained transitions; host receipt times are not sample or contact times.
+
 An IWR lock is a sensor candidate, not independently verified ball presence.
 A `locked` candidate whose reason is `gone` stays in the finite placement wait;
 it cannot start sensor preparation. Before enable, a fresh snapshot must retain
@@ -131,3 +163,9 @@ reported/legacy timeouts, explicit Resume and physical confirmations are include
 treated as a phase advance before the server reports it; stale/offline status
 disables controls. Stop remains available while a Next command awaits advance
 and status is current.
+
+Inspection browser checks additionally cover explicit starts after retained
+terminal sessions, package unavailability, malformed armed/owner states,
+initial offline/stalled status, safe Retry, partial file availability and
+mouse-drag/touch-tap at all three kiosk sizes. These are local fake-browser
+checks, not device, touchscreen, detector or hardware timing validation.

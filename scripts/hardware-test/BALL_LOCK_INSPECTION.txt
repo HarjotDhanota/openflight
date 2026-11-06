@@ -1,9 +1,33 @@
-Ball-lock inspection (CLI opt-in only)
+Ball-lock inspection (explicit CLI or touchscreen opt-in)
 
 The tester_sync_session.py --inspect-ball-lock selection is an explicit stopped
 inspection. It never prepares camera/OPS, arms a trigger, or requests a swing.
-API, normal UI and native fusion retain their existing shot path; this flag is
-not yet exposed as a UI selection. Do not swing during an inspection.
+Normal capture and native fusion retain their existing shot path. Do not swing
+during an inspection.
+
+Touchscreen: configure --internal-sync-diagnostic-package PATH on the tester,
+then explicitly select Start ball-lock inspection on /internal-sync.html.
+The normal Start capture session button never selects diagnostics. The package
+must be the separately matched diagnostic package; normal packages do not
+enable this control. Mode is immutable for the session, including refresh and
+retained status. New starts after terminal sessions require released resources
+and completed normal-boot restoration. Evidence from earlier sessions remains.
+
+For the first empty/still control, leave the lane empty throughout and stay
+still. Do not add a ball merely because background learning has finished.
+A later deliberate placement check may add a ball after learning finishes;
+the software does not verify the physical condition of either check. The first
+reported lock stops the radar before any OPS/camera preparation. Timeout and
+Stop retain available evidence. A saved trace is not verified ball presence or
+a correction to false locks. No RESET is needed between inspections while the
+same loaded session stays open. Explicit Next/Retry requires the existing
+stopped-runtime checks and creates a new attempt; no shot plan advances.
+End closes the owner; inspection Resume after closure is unsupported.
+
+The page labels failed/partial exports honestly and offers only files observed
+on disk from the allowlisted set below. Stop/End acknowledgement alone is not
+a verified stopped runtime. Keep power and USB connected until cleanup and
+restoration guidance finish; do not press RESET while stopping or saving.
 
 Read-only preflight (no devices opened):
   uv run --no-sync scripts/hardware-test/tester_sync_session.py \

@@ -508,3 +508,93 @@ def test_capture_plan_flag_defaults_to_today_and_refuses_unknown_names(tmp_path,
     monkeypatch.setattr(sys, "argv", [*base, "--iwr-capture-plan", "club64"])
     with pytest.raises(SystemExit):
         session.main()
+
+
+def test_inspection_labels_boot_wait_lock_save_and_repeated_same_owner_retry(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from copy import deepcopy
+    from pathlib import Path
+
+    import ball_lock_inspection as inspection
+    import tester_sync_session as session
+
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[2]))
+    from tests.test_internal_sync_pause import parser
+
+    collector, port = parser.__wrapped__(monkeypatch, session)
+    collector.diagnostic_binding = {"source_fingerprint": collector.context.build}
+    monkeypatch.setattr(inspection, "eligible_binding", lambda _binding: True)
+    monkeypatch.setattr(
+        inspection, "capture_stopped_evidence", lambda *_a, **_kw: {"session_bound": True}
+    )
+    observed, waits = [], []
+    original_publish = session.SessionFiles.publish
+
+    def publish(files, phase, **fields):
+        original_publish(files, phase, **fields)
+        observed.append(deepcopy(files.state))
+
+    @contextmanager
+    def runtime(_package, files, **options):
+        assert options["diagnostic"] is True
+        assert files.state["mode"] == "ball_lock_inspection"
+        assert files.state["diagnostic"] is True and files.state["captured_shot"] is False
+        files.publish("switches", message="Set RAM boot switches.")
+        try:
+            yield collector
+        finally:
+            files.state["resources_released"] = True
+
+    def wait(files, expected):
+        waits.append(expected)
+        if waits == ["next", "next"]:
+            raise session.AttemptStopped("pause before another inspection")
+        if waits.count("next") == 3:
+            raise session.SessionEnded("end same retained owner")
+
+    monkeypatch.setattr(session, "open_runtime", runtime)
+    monkeypatch.setattr(session.SessionFiles, "wait", wait)
+    monkeypatch.setattr(session.SessionFiles, "publish", publish)
+    session.run(tmp_path / "package", tmp_path / "session", diagnostic=True)
+    state = json.loads((tmp_path / "session/status.json").read_text())
+    assert state["phase"] == "stopped" and state["mode"] == "ball_lock_inspection"
+    assert len(state["attempts"]) == 2
+    assert all(result["diagnostic"] and not result["captured_shot"] for result in state["attempts"])
+    assert waits == ["next", "next", "retry", "next"]
+    assert port.writes.count(b"sensorStart\n") == port.writes.count(b"sensorStop\n") == 2
+    assert collector.next_shot == 1
+    assert len(list((tmp_path / "session/control-proofs").glob("*-retry.json"))) == 1
+    assert all(
+        s["mode"] == "ball_lock_inspection" and s["diagnostic"] and not s["captured_shot"]
+        for s in observed
+    )
+    assert all("planned_activity_index" not in s for s in observed)
+    assert any(s["phase"] == "inspection_locked" for s in observed)
+    for row in observed:
+        if row["phase"] in {
+            "next",
+            "preparing_attempt",
+            "learning_background",
+            "waiting_ball",
+            "inspection_locked",
+            "saving",
+        }:
+            assert "swing" in row["message"] and "inspection" in row["message"].lower()
+
+
+def test_inspection_package_preflight_failure_keeps_early_diagnostic_identity(
+    tmp_path, monkeypatch
+):
+    import tester_sync_session as session
+
+    def refuse(_package, **options):
+        assert options == {"diagnostic": True}
+        raise ValueError("mismatched package")
+
+    monkeypatch.setattr(session, "load_package", refuse)
+    with pytest.raises(ValueError, match="mismatched package"):
+        session.run(tmp_path / "package", tmp_path / "session", diagnostic=True)
+    state = json.loads((tmp_path / "session/status.json").read_text())
+    assert state["mode"] == "ball_lock_inspection" and state["diagnostic"] is True
+    assert state["phase"] == "failed" and not state["captured_shot"]
+    assert state["attempts"] == []
