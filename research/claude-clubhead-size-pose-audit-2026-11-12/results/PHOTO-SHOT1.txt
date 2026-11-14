@@ -1,0 +1,26 @@
+score lines: direction 24.5 deg in the image (rising toward the heel), pitch 15.0 px across them (autocorrelation, 7 to 15 px searched)
+mark: face level 89 DN, Otsu threshold 75 DN; 2923 px^2; centroid (171.4, 222.7); centre of its extent (172.0, 224.1); 62.0 px along the score lines x 70.6 px across (ratio 0.88)
+reading from the placed 3-D club (unchanged): toe-ward +22.5 .. +25.6 (median +24.3) mm; up +0.3 .. +5.4 (median +2.7) mm
+model at size 0.919: toe tip 40.6 mm from the centre, leading edge 22.6 mm below it, toe peak 53.4 mm above the leading edge
+
+INNER outline: 40 landmarks, each moved to the strongest edge within 2 px (median move 1.5 px); toe tip (139.1, 245.6); toe-peak face height 182.7 px -> 3.42 px per mm (score-line pitch would be 4.38 mm)
+   LANDMARKS  mark centroid:          11.3 mm from the toe tip,  22.1 mm above the leading edge = +29.3 toe-ward of centre,  -0.5 up | minus the reading's median  +5.0,  -3.2 mm
+   LANDMARKS  mark centre of extent:  11.3 mm from the toe tip,  21.7 mm above the leading edge = +29.3 toe-ward of centre,  -0.9 up | minus the reading's median  +5.0,  -3.6 mm
+   LANDMARKS  mark size 18.1 x 20.6 mm; scale-free: centroid at 0.41 of the toe-peak face height (reading 0.47, 0.43 .. 0.52)
+   AFFINE     outline distance 5.27 px rms at the LANDMARKS start, 2.63 after the fit; 2.77 px/mm along the score lines, 3.39 across; axes +0.9 deg from square; model's score-line axis -1.4 deg from the photo's
+   AFFINE     mark centroid:          12.5 mm from the toe tip,  22.2 mm above the leading edge = +28.1 toe-ward of centre,  -0.4 up | minus the reading's median  +3.8,  -3.1 mm
+   AFFINE     mark centre of extent:  12.5 mm from the toe tip,  21.8 mm above the leading edge = +28.1 toe-ward of centre,  -0.8 up | minus the reading's median  +3.8,  -3.5 mm
+
+OUTER outline: 36 landmarks, each moved to the strongest edge within 4 px (median move 1.5 px); toe tip (119.2, 226.3); toe-peak face height 190.3 px -> 3.56 px per mm (score-line pitch would be 4.21 mm)
+   LANDMARKS  mark centroid:          13.7 mm from the toe tip,  23.4 mm above the leading edge = +26.9 toe-ward of centre,  +0.8 up | minus the reading's median  +2.6,  -1.9 mm
+   LANDMARKS  mark centre of extent:  13.7 mm from the toe tip,  23.0 mm above the leading edge = +26.9 toe-ward of centre,  +0.4 up | minus the reading's median  +2.6,  -2.3 mm
+   LANDMARKS  mark size 17.4 x 19.8 mm; scale-free: centroid at 0.44 of the toe-peak face height (reading 0.47, 0.43 .. 0.52)
+   AFFINE     outline distance 3.93 px rms at the LANDMARKS start, 1.90 after the fit; 3.34 px/mm along the score lines, 3.51 across; axes -3.3 deg from square; model's score-line axis -0.4 deg from the photo's
+   AFFINE     mark centroid:          13.4 mm from the toe tip,  23.5 mm above the leading edge = +27.3 toe-ward of centre,  +0.9 up | minus the reading's median  +3.0,  -1.8 mm
+   AFFINE     mark centre of extent:  13.3 mm from the toe tip,  23.1 mm above the leading edge = +27.3 toe-ward of centre,  +0.5 up | minus the reading's median  +3.0,  -2.2 mm
+
+PHOTO, all eight: toe-ward +26.9 .. +29.3 mm (median +27.7); up -0.9 .. +0.9 mm (median +0.0)
+READING, all eight: toe-ward +22.5 .. +25.6 mm (median +24.3); up +0.3 .. +5.4 mm (median +2.7)
+photo median minus reading median: +3.4 mm toe-ward, -2.7 mm up
+photo median minus application 0fa9870b (+32.7, -10.8): -5.1 mm toe-ward, +10.8 mm up
+mark half-width along the score lines: 31.0 px = about 8.9 mm at 3.5 px/mm

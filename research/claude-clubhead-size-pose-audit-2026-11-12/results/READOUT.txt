@@ -1,0 +1,21 @@
+shot 1 f43 application      visible model 1100 px^2; off the head  158 (14 %); head not covered   16 ( 2 % of 958); IoU 0.84
+shot 1 f43 carried generic  visible model 1150 px^2; off the head  194 (17 %); head not covered    2 ( 0 % of 958); IoU 0.83
+shot 1: ferrule moved (+15.6, +5.0) px across the bracket f43 -> f44; contact fraction 0.674; outline affine fit rms 0.08 px
+   shaft-anchored placement at contact: +30.1 mm toe-ward of the face centre, -7.3 mm up from it = 17.3 mm above the leading edge, 40.1 mm below the top line there
+      if the carried model is -3 px (5 mm) higher: +30.2 toe-ward, -12.8 up
+      if the carried model is +3 px (5 mm) lower: +29.9 toe-ward, -1.8 up
+   application 0fa9870b: +32.7 mm toe-ward (+- 12.3), height ok: -10.8 mm
+shot 3 f43 application      visible model  784 px^2; off the head  385 (49 %); head not covered   60 (13 % of 459); IoU 0.47
+shot 3 f43 carried generic  visible model  562 px^2; off the head  103 (18 %); head not covered    0 ( 0 % of 459); IoU 0.82
+shot 3: ferrule moved (+2.7, -1.5) px across the bracket f43 -> f44; contact fraction 0.493; outline affine fit rms 0.04 px
+   shaft-anchored placement at contact: +4.3 mm toe-ward of the face centre, +13.1 mm up from it = 37.7 mm above the leading edge, 13.3 mm below the top line there
+      if the carried model is -3 px (7 mm) higher: +4.3 toe-ward, +6.1 up
+      if the carried model is +3 px (7 mm) lower: +4.4 toe-ward, +20.0 up
+   application 0fa9870b: +0.2 mm toe-ward (+- 12.1), height rejected: sole_edge_not_found_on_frame_44_2_samples
+shot 4 f44 application      visible model  768 px^2; off the head  516 (67 %); head not covered  320 (56 % of 572); IoU 0.23
+shot 4 f44 carried generic  visible model  613 px^2; off the head   68 (11 %); head not covered   27 ( 5 % of 572); IoU 0.85
+shot 4: ferrule moved (-1.3, +0.0) px across the bracket f44 -> f45; contact fraction 0.147; outline affine fit rms 0.06 px
+   shaft-anchored placement at contact: -15.9 mm toe-ward of the face centre, +7.3 mm up from it = 31.9 mm above the leading edge, 10.5 mm below the top line there
+      if the carried model is -3 px (6 mm) higher: -15.7 toe-ward, +0.2 up
+      if the carried model is +3 px (6 mm) lower: -16.0 toe-ward, +14.4 up
+   application 0fa9870b: -19.1 mm toe-ward (+- 10.7), height rejected: sole_edge_not_found_on_frame_45_4_samples

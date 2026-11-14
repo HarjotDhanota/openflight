@@ -1,0 +1,1 @@
+[SERVER] Camera analysis runs with a lighting note: lighting: too bright for the ball: 21% of it is clipped

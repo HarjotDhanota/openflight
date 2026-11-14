@@ -1,0 +1,21 @@
+SHOT 1   mark 12.3 / 23.9 | rest frame 43: 19 top columns (rim's own edge on 17), 10 toe rows (rim's outer edge on 0); cavity level 45 DN, its toe end x 168.4
+   rim thickness 2.88 px = 4.9 mm across the rim
+   W1 hosel + top + toe               width 1.000 | fit rms px: shaft 0.35, top 0.99, toe 1.28 | ferrule distance this placement implies 56.6 mm | reading 12.4 / 18.1 (miss +0.1 / -5.7)
+   W2 hosel + top + toe, width free   width 1.037 | fit rms px: shaft 0.07, top 0.93, toe 0.73 | ferrule distance this placement implies 56.3 mm | reading 14.3 / 17.8 (miss +1.9 / -6.0)
+
+SHOT 2   mark 43.3 / 12.4 | rest frame 42: 23 top columns (rim's own edge on 22), 4 toe rows (rim's outer edge on 3); cavity level 45 DN, its toe end x 186.8
+   rim thickness 3.02 px = 5.7 mm across the rim
+   W1 hosel + top + toe               width 1.000 | fit rms px: shaft 0.45, top 0.94, toe 2.19 | ferrule distance this placement implies 60.7 mm | reading 41.7 / 11.7 (miss -1.6 / -0.6)
+   W2 hosel + top + toe, width free   width 0.939 | fit rms px: shaft 0.22, top 0.81, toe 1.39 | ferrule distance this placement implies 61.1 mm | reading 40.0 / 12.1 (miss -3.4 / -0.3)
+
+SHOT 3   mark 43.5 / 30.3 | rest frame 43: 6 top columns (rim's own edge on 1), 6 toe rows (rim's outer edge on 0); cavity level 46 DN, its toe end x 187.8
+   rim thickness: only 1 values (6 needed) -> NOT PLACED
+
+SHOT 4   mark 66.1 / 28.1 | rest frame 44: 15 top columns (rim's own edge on 6), 7 toe rows (rim's outer edge on 0); cavity level 48 DN, its toe end x 201.4
+   rim thickness 3.29 px = 6.7 mm across the rim
+   W1 hosel + top + toe               width 1.000 | fit rms px: shaft 0.76, top 0.61, toe 2.51 | ferrule distance this placement implies 58.6 mm | reading 64.1 / 26.1 (miss -1.9 / -2.0)
+   W2 hosel + top + toe, width free   width 1.090 | fit rms px: shaft 0.06, top 0.68, toe 0.94 | ferrule distance this placement implies 57.8 mm | reading 63.3 / 25.2 (miss -2.8 / -2.9)
+
+RULE (written before running): W1 or W2, the same for all four, within 4 mm heel-toe and 4 mm in height on every shot.
+   W1  misses (heel-toe / height): +0.1 / -5.7   -1.6 / -0.6   not placed   -1.9 / -2.0 -> FAIL | implied ferrule distance: 56.6 60.7 58.6 mm
+   W2  misses (heel-toe / height): +1.9 / -6.0   -3.4 / -0.3   not placed   -2.8 / -2.9 -> FAIL | implied ferrule distance: 56.3 61.1 57.8 mm

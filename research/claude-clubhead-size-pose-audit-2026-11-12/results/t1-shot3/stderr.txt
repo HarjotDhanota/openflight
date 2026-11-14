@@ -1,0 +1,1 @@
+[SERVER] Camera analysis runs with a lighting note: lighting: the resting ball was not found where the setup saw it

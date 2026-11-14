@@ -1,0 +1,3 @@
+BLIND PREDICTION, shot 2 (PROTOCOL addendum 10). No face photo or mark has been read. TS4, shaft axis 75.0 mm, hosel 61.0 mm.
+   setup_free: ball (top-edge rise, sideways px) by frame: f37 +0.0,-0.2 f38 -0.0,-0.1 f39 -0.1,-0.1 f40 -0.0,-0.1 f41 n/a f42 n/a -> last rest frame 40
+FAILED: the ball track has fewer than two measurable frames.

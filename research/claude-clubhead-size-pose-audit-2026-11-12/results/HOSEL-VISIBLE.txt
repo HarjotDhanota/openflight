@@ -1,0 +1,21 @@
+SHOT 1   frames 43 / 44, time fraction to contact 0.61
+   before f43: hosel top row 82.70, bright run ends row 110.45 = 27.8 rows; 0.529 rows per mm -> L = 52.4 mm (shaft 124 DN, hosel plateau 115 DN)
+   after  f44: hosel top row 87.44, bright run ends row 114.00 = 26.6 rows; 0.499 rows per mm -> L = 53.3 mm (shaft 114 DN, hosel plateau 108 DN)
+   at contact (interpolated): 53.0 mm; the two frames differ by 0.8 mm
+
+SHOT 2   frames 42 / 43, time fraction to contact 0.72
+   before f42: hosel top row 80.25, bright run ends row 105.62 = 25.4 rows; 0.463 rows per mm -> L = 54.8 mm (shaft 112 DN, hosel plateau 104 DN)
+   after  f43: hosel top row 87.00, bright run ends row 120.00 = 33.0 rows; 0.436 rows per mm -> L = 75.7 mm (shaft 106 DN, hosel plateau 96 DN)
+   at contact (interpolated): 70.0 mm; the two frames differ by 20.9 mm
+
+SHOT 3   frames 43 / 44, time fraction to contact 0.49
+   before f43: hosel top row 94.59, bright run ends row 114.33 = 19.7 rows; 0.385 rows per mm -> L = 51.2 mm (shaft 109 DN, hosel plateau 110 DN)
+   after  f44: hosel top row 92.53, bright run ends row 119.00 = 26.5 rows; 0.367 rows per mm -> L = 72.2 mm (shaft 104 DN, hosel plateau 102 DN)
+   at contact (interpolated): 61.4 mm; the two frames differ by 20.9 mm
+
+SHOT 4   frames 44 / 45, time fraction to contact 0.18
+   before f44: hosel top row 92.86, bright run ends row 119.17 = 26.3 rows; 0.427 rows per mm -> L = 61.6 mm (shaft 107 DN, hosel plateau 95 DN)
+   after  f45: hosel top row 92.42, bright run ends row 118.67 = 26.2 rows; 0.406 rows per mm -> L = 64.6 mm (shaft 104 DN, hosel plateau 98 DN)
+   at contact (interpolated): 62.1 mm; the two frames differ by 3.1 mm
+
+RULE (written before running): L at contact across the four shots 53.0 70.0 61.4 62.1: max - min 17.0 mm (limit 3) -> FAIL; largest before/after difference 20.9 mm (limit 4) -> FAIL

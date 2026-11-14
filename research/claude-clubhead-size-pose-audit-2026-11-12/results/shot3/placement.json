@@ -1,0 +1,1040 @@
+{
+ "place_clip_calls": 1,
+ "shafts": {
+  "43": {
+   "point_px": [
+    122.47025107871791,
+    86.37641403515755
+   ],
+   "top_px": [
+    108.0,
+    51.0
+   ],
+   "normal_px": [
+    -0.940108554906396,
+    0.3408752044250335
+   ],
+   "residual_px": 0.25
+  },
+  "44": {
+   "point_px": [
+    131.55498683553006,
+    86.78711981965866
+   ],
+   "top_px": [
+    102.0,
+    39.0
+   ],
+   "normal_px": [
+    -0.8704373390806526,
+    0.492279228420409
+   ],
+   "residual_px": 0.25
+  }
+ },
+ "kwargs": [
+  "multiframe_comparison"
+ ],
+ "clip": {
+  "shot_id": "camera_20261027_171034_000_004",
+  "shot_number": 3,
+  "fps": 276.4814399916102,
+  "mirrored": false,
+  "trigger_index": 44,
+  "exposure_us": 298.0,
+  "frame_size": "640x400",
+  "club": "7-iron",
+  "handedness": "right",
+  "club_speed_mps": 35.003232,
+  "ball": {
+   "x": 424.90602018591665,
+   "y": 195.61775675114623,
+   "diameter_px": 18.739011059913153
+  },
+  "ball_source": "detector_at_the_range_size",
+  "range_mm": 2258.342102987461,
+  "range_sigma_mm": 361.5125348724356,
+  "range_source": "shot_camera_resting_ball",
+  "error": null,
+  "face": {
+   "dynamic_loft": {
+    "value": 30.0,
+    "sigma": 6.0,
+    "source": "prior_nominal_loft_minus_typical_shaft_lean",
+    "evidence": null
+   },
+   "face_angle": {
+    "value": 0.0,
+    "sigma": 4.0,
+    "source": "prior_square_face",
+    "evidence": null
+   },
+   "attack_angle": {
+    "value": -4.0,
+    "sigma": 4.0,
+    "source": "prior_category_typical_attack",
+    "evidence": null
+   },
+   "face_centre_height": {
+    "value": 24.6,
+    "sigma": 2.0,
+    "source": "reference_geometry_face_centre_rule",
+    "evidence": null
+   },
+   "face_centre_from_toe": {
+    "value": 44.24,
+    "sigma": 2.0,
+    "source": "reference_geometry_face_centre_rule",
+    "evidence": null
+   },
+   "sole_width": {
+    "value": 19.9,
+    "sigma": 2.3,
+    "source": "official_range_mizuno_7i_sole_width_15.9_to_23.9_mm",
+    "evidence": null
+   },
+   "effective_bounce": {
+    "value": 3.0,
+    "sigma": 3.0,
+    "source": "prior_effective_bounce_at_impact",
+    "evidence": null
+   },
+   "lens_height": {
+    "value": 95.0,
+    "sigma": 3.0,
+    "source": "rig_file_lens_height",
+    "evidence": null
+   }
+  },
+  "extra_dynamic_lie": {
+   "value": null,
+   "status": "not_measured",
+   "source": "camera lower shaft in a constant-forward-depth plane (v1)",
+   "range": null,
+   "reason": "needs two adjacent head/shaft frames immediately before impact",
+   "note": "Unvalidated estimate: assumes no shaft depth change along the lower segment, zero camera roll and configured rig pitch with level housing; uses pinhole intrinsics without distortion correction. Two pre-impact lines are extrapolated to contact. Unknown shaft lean and calibration error are not bounded."
+  },
+  "angle_input_decisions": {
+   "dynamic_loft": {
+    "accepted": false,
+    "reason": "angle_status_not_eligible",
+    "producer": {
+     "value": 21.5588727740275,
+     "source": "D-plane inversion of the fitted launch model",
+     "status": "experimental",
+     "unit": "deg",
+     "frame": null,
+     "note": "assumes a centre-face strike; rigid-body relation not used: spin not measured; vertical launch from the camera fallback launch (the IWR did not measure this shot) (nominal lens intrinsics: the listed focal length, not calibrated); depth from tee range + OPS club speed (not measured); camera confidence tier low, not high (experimental); horizontal launch from the camera horizontal on the IWR's depth (nominal lens intrinsics: the listed focal length, not calibrated); depth from tee range + OPS club speed (not measured); camera confidence tier medium, not high (experimental); rests on the tee the camera located (the setup box's resting ball through the camera model; the IWR's launch point only cross-checks it): the camera located the tee; iwr_not_measured (anchor agreement rests on a loose prior (sigma 0.36 m); contact time from the 33.5 m/s club walk reaching the tee bin at 22.9 ms; no camera contact time on the IWR ring clock); rests on the experimental club path; rests on the experimental attack angle"
+    },
+    "evidence": null
+   },
+   "attack_angle": {
+    "accepted": false,
+    "reason": "angle_status_not_eligible",
+    "producer": {
+     "value": 5.24,
+     "source": "camera + IWR chained delivery",
+     "status": "experimental",
+     "unit": "deg",
+     "frame": null,
+     "note": "depth from tee range + OPS club speed (not measured); camera confidence tier low, not high (experimental); rests on the tee the camera located (the setup box's resting ball through the camera model; the IWR's launch point only cross-checks it): the camera located the tee; iwr_not_measured (anchor agreement rests on a loose prior (sigma 0.36 m); contact time from the 33.5 m/s club walk reaching the tee bin at 22.9 ms; no camera contact time on the IWR ring clock)"
+    },
+    "evidence": null
+   },
+   "face_angle": {
+    "accepted": false,
+    "reason": "angle_status_not_eligible",
+    "producer": {
+     "value": 6.955303882804468,
+     "source": "D-plane inversion of the fitted launch model",
+     "status": "experimental",
+     "unit": "deg",
+     "frame": "target_line",
+     "note": "assumes a centre-face strike; rigid-body relation not used: spin not measured; vertical launch from the camera fallback launch (the IWR did not measure this shot) (nominal lens intrinsics: the listed focal length, not calibrated); depth from tee range + OPS club speed (not measured); camera confidence tier low, not high (experimental); horizontal launch from the camera horizontal on the IWR's depth (nominal lens intrinsics: the listed focal length, not calibrated); depth from tee range + OPS club speed (not measured); camera confidence tier medium, not high (experimental); rests on the tee the camera located (the setup box's resting ball through the camera model; the IWR's launch point only cross-checks it): the camera located the tee; iwr_not_measured (anchor agreement rests on a loose prior (sigma 0.36 m); contact time from the 33.5 m/s club walk reaching the tee bin at 22.9 ms; no camera contact time on the IWR ring clock); rests on the experimental club path; rests on the experimental attack angle"
+    },
+    "evidence": null
+   }
+  }
+ },
+ "collision_model": {
+  "model_version": "e2-2026-10-20-fitted",
+  "face_method": "d_plane_inversion",
+  "weights": {
+   "horizontal": 0.69,
+   "vertical": 0.81,
+   "category": "7-iron",
+   "basis": "Wood et al. 2018 Table 1, 7-iron"
+  },
+  "inputs": {
+   "club_path": {
+    "value": 14.63,
+    "label": "estimated",
+    "source": "camera_fused_chained",
+    "frame": "target_line",
+    "reason": "depth from tee range + OPS club speed (not measured); camera confidence tier medium, not high (experimental)",
+    "experimental": true
+   },
+   "attack_angle": {
+    "value": 5.24,
+    "label": "estimated",
+    "source": "camera_fused_chained",
+    "frame": null,
+    "reason": "depth from tee range + OPS club speed (not measured); camera confidence tier low, not high (experimental)",
+    "experimental": true
+   },
+   "launch_horizontal": {
+    "value": 8.426828465919996,
+    "label": "estimated",
+    "source": "camera_assisted_experimental",
+    "frame": "target_line",
+    "reason": "horizontal launch from the camera horizontal on the IWR's depth (nominal lens intrinsics: the listed focal length, not calibrated)",
+    "experimental": false
+   },
+   "launch_vertical": {
+    "value": 18.639751365321143,
+    "label": "estimated",
+    "source": "camera_fallback",
+    "frame": null,
+    "reason": "vertical launch from the camera fallback launch (the IWR did not measure this shot) (nominal lens intrinsics: the listed focal length, not calibrated)",
+    "experimental": true
+   },
+   "club_speed_mph": {
+    "value": null,
+    "label": "measured",
+    "source": null,
+    "frame": null,
+    "reason": "full club speed at impact not measured for the clubhead: the OPS reading is radial; a precontact full-speed reading is not an impact referral",
+    "experimental": false
+   }
+  },
+  "metrics": {
+   "face_angle": {
+    "value": 6.955303882804468,
+    "status": "estimated",
+    "source": "D-plane inversion of the fitted launch model",
+    "unit": "deg",
+    "frame": "target_line",
+    "reason": "vertical launch from the camera fallback launch (the IWR did not measure this shot) (nominal lens intrinsics: the listed focal length, not calibrated); depth from tee range + OPS club speed (not measured); camera confidence tier low, not high (experimental); horizontal launch from the camera horizontal on the IWR's depth (nominal lens intrinsics: the listed focal length, not calibrated); depth from tee range + OPS club speed (not measured); camera confidence tier medium, not high (experimental)",
+    "note": "rigid-body relation not used: spin not measured"
+   },
+   "dynamic_loft": {
+    "value": 21.5588727740275,
+    "status": "estimated",
+    "source": "D-plane inversion of the fitted launch model",
+    "unit": "deg",
+    "frame": null,
+    "reason": "vertical launch from the camera fallback launch (the IWR did not measure this shot) (nominal lens intrinsics: the listed focal length, not calibrated); depth from tee range + OPS club speed (not measured); camera confidence tier low, not high (experimental); horizontal launch from the camera horizontal on the IWR's depth (nominal lens intrinsics: the listed focal length, not calibrated); depth from tee range + OPS club speed (not measured); camera confidence tier medium, not high (experimental)",
+    "note": "rigid-body relation not used: spin not measured"
+   },
+   "spin_loft": {
+    "value": 17.933122854636544,
+    "status": "estimated",
+    "source": "D37 definition (metric_definitions) of the calculated face and loft",
+    "unit": "deg",
+    "frame": "target_line",
+    "reason": "vertical launch from the camera fallback launch (the IWR did not measure this shot) (nominal lens intrinsics: the listed focal length, not calibrated); depth from tee range + OPS club speed (not measured); camera confidence tier low, not high (experimental); horizontal launch from the camera horizontal on the IWR's depth (nominal lens intrinsics: the listed focal length, not calibrated); depth from tee range + OPS club speed (not measured); camera confidence tier medium, not high (experimental); depth from tee range + OPS club speed (not measured); camera confidence tier low, not high (experimental); depth from tee range + OPS club speed (not measured); camera confidence tier medium, not high (experimental)",
+    "note": null
+   },
+   "face_to_path": {
+    "value": -7.674696117195532,
+    "status": "estimated",
+    "source": "D37 definition (metric_definitions) of the calculated face and loft",
+    "unit": "deg",
+    "frame": "target_line",
+    "reason": "vertical launch from the camera fallback launch (the IWR did not measure this shot) (nominal lens intrinsics: the listed focal length, not calibrated); depth from tee range + OPS club speed (not measured); camera confidence tier low, not high (experimental); horizontal launch from the camera horizontal on the IWR's depth (nominal lens intrinsics: the listed focal length, not calibrated); depth from tee range + OPS club speed (not measured); camera confidence tier medium, not high (experimental); depth from tee range + OPS club speed (not measured); camera confidence tier medium, not high (experimental)",
+    "note": null
+   },
+   "d_plane_tilt": {
+    "value": -23.684566698359845,
+    "status": "estimated",
+    "source": "D37 definition (metric_definitions) of the calculated face and loft",
+    "unit": "deg",
+    "frame": "target_line",
+    "reason": "vertical launch from the camera fallback launch (the IWR did not measure this shot) (nominal lens intrinsics: the listed focal length, not calibrated); depth from tee range + OPS club speed (not measured); camera confidence tier low, not high (experimental); horizontal launch from the camera horizontal on the IWR's depth (nominal lens intrinsics: the listed focal length, not calibrated); depth from tee range + OPS club speed (not measured); camera confidence tier medium, not high (experimental); depth from tee range + OPS club speed (not measured); camera confidence tier low, not high (experimental); depth from tee range + OPS club speed (not measured); camera confidence tier medium, not high (experimental)",
+    "note": null
+   },
+   "spin_rate": {
+    "value": null,
+    "status": "not_measured",
+    "source": "impulse collision model (Penner 2001 normal impulse; rolling or sliding, Cross 2002; gains fitted by the maintainer)",
+    "unit": "rpm",
+    "frame": null,
+    "reason": "full club speed at impact not measured for the clubhead: the OPS reading is radial; a precontact full-speed reading is not an impact referral",
+    "note": null
+   },
+   "spin_axis": {
+    "value": -21.272747152717344,
+    "status": "estimated",
+    "source": "D-plane tilt x (0.81385 + 0.00342 x dynamic loft), clean-room fit to one session's TM4 irons (16 shots, 0.014 deg)",
+    "unit": "deg",
+    "frame": "target_line",
+    "reason": "vertical launch from the camera fallback launch (the IWR did not measure this shot) (nominal lens intrinsics: the listed focal length, not calibrated); depth from tee range + OPS club speed (not measured); camera confidence tier low, not high (experimental); horizontal launch from the camera horizontal on the IWR's depth (nominal lens intrinsics: the listed focal length, not calibrated); depth from tee range + OPS club speed (not measured); camera confidence tier medium, not high (experimental); depth from tee range + OPS club speed (not measured); camera confidence tier low, not high (experimental); depth from tee range + OPS club speed (not measured); camera confidence tier medium, not high (experimental); vertical launch from the camera fallback launch (the IWR did not measure this shot) (nominal lens intrinsics: the listed focal length, not calibrated); depth from tee range + OPS club speed (not measured); camera confidence tier low, not high (experimental); horizontal launch from the camera horizontal on the IWR's depth (nominal lens intrinsics: the listed focal length, not calibrated); depth from tee range + OPS club speed (not measured); camera confidence tier medium, not high (experimental)",
+    "note": "contact flagged: collision spin unvalidated on mishits; no impact location: centre-face strike assumed, no gear effect",
+    "condition": "centred contact assumed: impact location not measured",
+    "contact_flagged": true
+   },
+   "gyro": {
+    "value": null,
+    "status": "not_measured",
+    "source": "Penner 2001 collision model (Am. J. Phys. 69, 563)",
+    "unit": "deg",
+    "frame": null,
+    "reason": "the collision model is planar: Penner's spin vector is normal to the D-plane, so gyro is zero by construction, not a result",
+    "note": null
+   },
+   "spin_index": {
+    "value": null,
+    "status": "not_measured",
+    "source": "measured spin / expected spin (club speed x k x sin spin loft)",
+    "unit": "%",
+    "frame": null,
+    "reason": "the index needs a measured spin (spin: spin not measured)",
+    "note": null
+   },
+   "smash_index": {
+    "value": null,
+    "status": "not_measured",
+    "source": "ball speed / expected ball speed (normal-impulse index)",
+    "unit": "%",
+    "frame": null,
+    "reason": "full club speed at impact not measured for the clubhead: the OPS reading is radial; a precontact full-speed reading is not an impact referral",
+    "note": null
+   }
+  },
+  "forward": null
+ },
+ "placement": {
+  "status": "ok",
+  "reason": "ok",
+  "label": "experimental_unqualified",
+  "handedness": "right",
+  "impact_offset_mm": 0.21756701655475297,
+  "impact_offset_sigma_mm": 12.120196949235684,
+  "height_status": "rejected",
+  "height_reason": "sole_edge_not_found_on_frame_44_2_samples",
+  "impact_height_mm": null,
+  "impact_height_sigma_mm": null,
+  "contact_frame": 44,
+  "last_rest_frame": 43,
+  "face_centre_convention": "R&A/USGA centre template: woods and hybrids the face perimeter's centre; irons and wedges the longest score line's middle, midway between the face's bottom edge and the top line. Heel-toe: the category's distance heel-ward of the toe landmark. Height: above the leading edge (the head's lowest point seen along the face normal)",
+  "notes": [
+   "toe edge not found on frame 44: its heel-toe carried from frame 43 by the club's motion (+-17.1 mm), its sole fitted there"
+  ],
+  "diagnostics": {
+   "orientation": {
+    "face_angle": {
+     "value": 4.8887,
+     "sigma": 6.0,
+     "source": "estimated (D-plane inversion of the fitted launch model)"
+    },
+    "dynamic_loft": {
+     "value": 21.5589,
+     "sigma": 6.0,
+     "source": "estimated (D-plane inversion of the fitted launch model)"
+    },
+    "lie": {
+     "value": 1.5721,
+     "sigma": 4.0,
+     "source": "camera club stage: lower shaft at contact (C14)"
+    }
+   },
+   "orientation_notes": [],
+   "scene": {
+    "lens_height": {
+     "value": 95.0,
+     "sigma": 3.0,
+     "source": "rig_file_lens_height"
+    },
+    "ball_height": {
+     "value": 21.35,
+     "sigma": 2.0,
+     "source": "one_radius_above_the_hitting_surface"
+    }
+   },
+   "camera": {
+    "focal_px": 1000.0001,
+    "source": "session_lens_nominal",
+    "tilt": {
+     "pitch": {
+      "value": 0.0,
+      "sigma": 1.0,
+      "source": "assumed_level_rig_design"
+     },
+     "roll": {
+      "value": 0.0,
+      "sigma": 1.0,
+      "source": "assumed_level_rig_design"
+     }
+    },
+    "model": "pinhole, no distortion"
+   },
+   "attack_angle": {
+    "value": 5.24,
+    "sigma": 6.0,
+    "source": "estimated (camera_fused_chained); experimental; depth from tee range + OPS club speed (not measured); camera confidence tier low, not high (experimental)"
+   },
+   "club_path": {
+    "value": 12.5634,
+    "sigma": 6.0,
+    "source": "estimated (camera_fused_chained); experimental; depth from tee range + OPS club speed (not measured); camera confidence tier medium, not high (experimental)"
+   },
+   "contact": {
+    "status": "ok",
+    "reason": "ok",
+    "contact_frame": 44,
+    "last_rest_frame": 43,
+    "source": "top_edge",
+    "edge_frame": 44,
+    "cap_frame": 44,
+    "flying_ball_frame": 44,
+    "confirmed_by": "cap",
+    "warning": null,
+    "reference_frames": 8,
+    "edge_available": true,
+    "edge_rise_px": [
+     -0.0,
+     0.02,
+     -0.01,
+     0.0,
+     -0.0,
+     0.0,
+     -0.0,
+     -0.02,
+     0.01,
+     -0.01,
+     0.0,
+     -0.03,
+     -0.01,
+     -0.0,
+     -0.01,
+     -0.02,
+     -0.01,
+     -0.01,
+     -0.01,
+     -0.02,
+     -0.02,
+     -0.0,
+     -0.04,
+     -0.01,
+     -0.01,
+     -0.03,
+     0.01,
+     -0.03,
+     -0.05,
+     0.0,
+     -0.03,
+     -0.02,
+     -0.03,
+     -0.02,
+     -0.01,
+     -0.04,
+     -0.03,
+     -0.03,
+     -0.01,
+     -0.03,
+     -0.01,
+     -0.55,
+     null,
+     0.94,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ],
+    "cap_change": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.355,
+     1.0,
+     0.032,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ]
+   },
+   "fps": 276.4814399916102,
+   "exposure_us": 298.0,
+   "ball_range_mm": 2258.3,
+   "ball_range_sigma_mm": 361.5,
+   "ball_range_source": "shot_camera_resting_ball",
+   "club_speed_mps": 35.003232,
+   "club_speed_source": "given",
+   "contact_fraction": 0.49336378714858387,
+   "contact_fraction_source": "ball_departure_extrapolation",
+   "contact_fraction_note": null,
+   "contact_time_basis": "exposure_centres",
+   "frame_clock_source": "sensor_timestamp_model_centres",
+   "frame_clock_error": null,
+   "gear_effect": {
+    "status": "not_applied",
+    "reason": "S4 not run: the orientation assumes a centred strike; refine_with_orientation_update is the hook"
+   },
+   "club_model": {
+    "category": "iron",
+    "club": "7-iron",
+    "source": "club_outline_reference",
+    "samples": {
+     "toe": 34,
+     "sole": 38,
+     "topline": 35,
+     "corner": 0,
+     "heel": 75
+    },
+    "sole_width": {
+     "value": 19.9,
+     "sigma": 2.3,
+     "source": "official_range_mizuno_7i_sole_width_15.9_to_23.9_mm"
+    },
+    "effective_bounce": {
+     "value": 3.0,
+     "sigma": 3.0,
+     "source": "prior_effective_bounce_at_impact"
+    },
+    "centre_from_toe": {
+     "value": 44.24,
+     "sigma": 2.0,
+     "source": "reference_geometry_face_centre_rule"
+    },
+    "centre_height": {
+     "value": 24.6,
+     "sigma": 2.0,
+     "source": "reference_geometry_face_centre_rule"
+    },
+    "static_lie_deg": 62.3
+   },
+   "bracket_duration_ms": 3.6169999999999902,
+   "bracket_model_centres_ms": [
+    155.674,
+    159.291
+   ],
+   "bracket_exposure_us": [
+    298.0,
+    298.0
+   ],
+   "exposure_source": "per_frame_capture",
+   "contact_fraction_sigma": 0.023871675498840807,
+   "contact_sigma_ms": 0.08634385027930697,
+   "bracket_frames": [
+    43,
+    44
+   ],
+   "frames": {
+    "43": {
+     "toe_mm": 8.05,
+     "up_mm": -27.27,
+     "normal_mm": -57.8,
+     "sigma_mm": [
+      2.18,
+      2.18
+     ],
+     "edges": {
+      "toe": {
+       "samples": 34,
+       "accepted": 16,
+       "predicted_blur_px": 0.46,
+       "median_contrast_dn": 21.8
+      },
+      "sole": {
+       "samples": 38,
+       "accepted": 38,
+       "predicted_blur_px": 0.08,
+       "median_contrast_dn": 35.1
+      },
+      "shaft": {
+       "found": true,
+       "rows": 8,
+       "line_residual_px": 0.25,
+       "median_residual_px": 3.052,
+       "rows_kept": 2,
+       "weight": 8.777
+      },
+      "topline": {
+       "samples": 35,
+       "accepted": 19,
+       "median_residual_mm": 4.9,
+       "fitted": false
+      }
+     },
+     "time_ms": 155.674,
+     "ball_spot": "none"
+    },
+    "44": {
+     "toe_mm": -6.45,
+     "up_mm": 14.36,
+     "normal_mm": 49.26,
+     "sigma_mm": [
+      2.29,
+      2.29
+     ],
+     "edges": {
+      "toe": {
+       "samples": 34,
+       "accepted": 2,
+       "predicted_blur_px": 0.34,
+       "median_contrast_dn": 18.1,
+       "carry_initialization": {
+        "from_frame": 43,
+        "toe_mm": -6.454,
+        "motion_source": "supplied_club_direction",
+        "velocity_mm_per_ms": [
+         7.582076,
+         -3.196769,
+         34.022331
+        ],
+        "direction_sigma_deg": 8.485281,
+        "sigma_mm": 17.135,
+        "sigma_source": "supplied_travel_times_direction_sigma"
+       },
+       "carried_from_frame": 43,
+       "carried_sigma_mm": 17.135
+      },
+      "sole": {
+       "samples": 38,
+       "accepted": 2,
+       "predicted_blur_px": 0.06,
+       "median_contrast_dn": 11.5
+      },
+      "shaft": {
+       "found": true,
+       "rows": 8,
+       "line_residual_px": 0.25,
+       "median_residual_px": 1.162,
+       "rows_kept": 4,
+       "weight": 0.179
+      },
+      "topline": {
+       "samples": 35,
+       "accepted": 0,
+       "median_residual_mm": null,
+       "fitted": false
+      }
+     },
+     "time_ms": 159.291,
+     "ball_spot": "post_departure_median_of_frames_55_58_consistent_late_reference_departure_corridor_flying_ball"
+    }
+   },
+   "normal_speed_mm_per_ms": 32.389,
+   "normal_speed_source": "club_speed_less_fitted_in_plane_speed",
+   "fitted_in_plane_velocity_mm_per_ms": [
+    5.1,
+    11.6,
+    4.16
+   ],
+   "interpolation_weights": [
+    0.4601,
+    0.5399
+   ],
+   "contact_time_ms": 157.458,
+   "ball_centre_above_surface_mm": 103.77,
+   "ball_centre_above_surface_scene_mm": 21.35,
+   "head_lowest_point_above_surface_mm": 76.36,
+   "head_lowest_point_above_ball_bottom_mm": -6.06,
+   "warnings": [
+    "ball_centre_104_mm_above_the_surface_not_21_mm_lens_height_or_camera_pitch_is_off"
+   ],
+   "contact_from_toe_mm": -44.02,
+   "contact_above_leading_edge_mm": 19.8,
+   "shaft_constraint": {
+    "status": "fitted",
+    "frames": [
+     43,
+     44
+    ],
+    "detected_frames": [
+     43,
+     44
+    ],
+    "used_frames": [
+     43,
+     44
+    ],
+    "line_residual_px": 0.25,
+    "hosel_axis_uv_mm": [
+     -55.68,
+     10.61
+    ],
+    "static_lie_deg": 62.3
+   },
+   "offset_uncertainty_budget_mm": {
+    "placement_fit_mm": 1.59,
+    "ball_centre_mm": 1.129,
+    "toe_carried_mm": 9.251,
+    "contact_timing_mm": 0.306,
+    "face_angle_mm": 2.509,
+    "dynamic_loft_mm": 0.03,
+    "lie_mm": 1.525,
+    "range_scale_mm": 6.628,
+    "club_speed_mm": 0.189,
+    "camera_pitch_mm": 0.001,
+    "camera_roll_mm": 0.111,
+    "shaft_line_mm": 0.064,
+    "sole_geometry_mm": 0.318,
+    "face_centre_mm": 2.0,
+    "arc_chord_mm": 0.753,
+    "face_rotation_mm": 0.39
+   },
+   "uncertainty_budget_status": "complete",
+   "refused_uncertainty_perturbations": [],
+   "face_rotation_rate_deg_s": {
+    "value": 3000.0,
+    "source": "assumed_upper_bound_not_measured"
+   },
+   "not_in_uncertainty": [
+    "residual lens/rectification and principal-point calibration uncertainty",
+    "the club's own outline against the population average beyond the face-centre spread",
+    "topline thickness and the back of the head (thin face plate plus sole strip)",
+    "the head's arc within the bracket for the height axis"
+   ],
+   "orientation_provenance": {
+    "face_angle": {
+     "origin": "d_plane",
+     "label": "estimated"
+    },
+    "dynamic_loft": {
+     "origin": "d_plane",
+     "label": "estimated"
+    },
+    "lie": {
+     "origin": "given",
+     "label": "estimated"
+    }
+   },
+   "club_path_provenance": {
+    "origin": "collision_input",
+    "label": "estimated",
+    "reason": null,
+    "input": {
+     "value": 14.63,
+     "label": "estimated",
+     "source": "camera_fused_chained",
+     "frame": "target_line",
+     "reason": "depth from tee range + OPS club speed (not measured); camera confidence tier medium, not high (experimental)",
+     "experimental": true
+    }
+   },
+   "attack_angle_provenance": {
+    "origin": "collision_input",
+    "label": "estimated",
+    "source": "estimated (camera_fused_chained); experimental; depth from tee range + OPS club speed (not measured); camera confidence tier low, not high (experimental)",
+    "reason": null,
+    "input": {
+     "value": 5.24,
+     "label": "estimated",
+     "source": "camera_fused_chained",
+     "frame": null,
+     "reason": "depth from tee range + OPS club speed (not measured); camera confidence tier low, not high (experimental)",
+     "experimental": true
+    }
+   },
+   "dynamic_lie_estimate": {
+    "value": null,
+    "status": "not_measured",
+    "source": "camera lower shaft in a constant-forward-depth plane (v1)",
+    "range": null,
+    "reason": "needs two adjacent head/shaft frames immediately before impact",
+    "note": "Unvalidated estimate: assumes no shaft depth change along the lower segment, zero camera roll and configured rig pitch with level housing; uses pinhole intrinsics without distortion correction. Two pre-impact lines are extrapolated to contact. Unknown shaft lean and calibration error are not bounded."
+   }
+  }
+ },
+ "orientation": {
+  "face_angle": {
+   "value": 4.8887,
+   "sigma": 6.0,
+   "source": "estimated (D-plane inversion of the fitted launch model)"
+  },
+  "dynamic_loft": {
+   "value": 21.5589,
+   "sigma": 6.0,
+   "source": "estimated (D-plane inversion of the fitted launch model)"
+  },
+  "lie": {
+   "value": 1.5721,
+   "sigma": 4.0,
+   "source": "camera club stage: lower shaft at contact (C14)"
+  }
+ },
+ "scene": {
+  "lens_height": {
+   "value": 95.0,
+   "sigma": 3.0,
+   "source": "rig_file_lens_height"
+  },
+  "ball_height": {
+   "value": 21.35,
+   "sigma": 2.0,
+   "source": "one_radius_above_the_hitting_surface"
+  }
+ },
+ "prepared": {
+  "roi_origin": [
+   278,
+   120
+  ],
+  "flipped": false,
+  "full_size": [
+   640,
+   400
+  ],
+  "camera": {
+   "focal_px": 1000.0001,
+   "principal_point_px": [
+    41.5,
+    79.5
+   ],
+   "source": "session_lens_nominal"
+  },
+  "ball": {
+   "x": 146.90602018591665,
+   "y": 75.61775675114623,
+   "diameter_px": 18.739011059913153
+  },
+  "contact": {
+   "contact_frame": 44,
+   "last_rest_frame": 43,
+   "source": "top_edge",
+   "confirmed_by": "cap",
+   "warning": null
+  },
+  "contact_fraction": 0.49336378714858387,
+  "contact_fraction_source": "ball_departure_extrapolation",
+  "ball_range_mm": 2258.342102987461,
+  "contact_ms": 157.45849681811643,
+  "frame_time_ms": [
+   0.149,
+   3.766,
+   7.381,
+   10.998999999999999,
+   14.617999999999999,
+   18.234,
+   21.851000000000003,
+   25.465,
+   29.082,
+   32.7,
+   36.315,
+   39.933,
+   43.544000000000004,
+   47.166000000000004,
+   50.783,
+   54.4,
+   58.017,
+   61.634,
+   65.251,
+   68.868,
+   72.485,
+   76.104,
+   79.719,
+   83.336,
+   86.952,
+   90.568,
+   94.191,
+   97.804,
+   101.421,
+   105.037,
+   108.655,
+   112.271,
+   115.888,
+   119.505,
+   123.122,
+   126.739,
+   130.356,
+   133.976,
+   137.592,
+   141.208,
+   144.824,
+   148.441,
+   152.057,
+   155.674,
+   159.291,
+   162.91,
+   166.527,
+   170.142,
+   173.75900000000001,
+   177.376,
+   180.994,
+   184.61,
+   188.227,
+   191.844,
+   195.461,
+   199.078,
+   202.694,
+   206.312,
+   209.928
+  ],
+  "window": [
+   40,
+   41,
+   42,
+   43,
+   44
+  ]
+ },
+ "frames": {
+  "43": {
+   "toe_mm": 8.045557635594454,
+   "up_mm": -27.27480353699415,
+   "normal_mm": -57.7983056893965,
+   "anchor_px": [
+    143.60461836540537,
+    77.27756789944061
+   ],
+   "edges": {
+    "toe": {
+     "samples": 34,
+     "accepted": 16,
+     "predicted_blur_px": 0.46,
+     "median_contrast_dn": 21.8
+    },
+    "sole": {
+     "samples": 38,
+     "accepted": 38,
+     "predicted_blur_px": 0.08,
+     "median_contrast_dn": 35.1
+    },
+    "shaft": {
+     "found": true,
+     "rows": 8,
+     "line_residual_px": 0.25,
+     "median_residual_px": 3.052,
+     "rows_kept": 2,
+     "weight": 8.777
+    },
+    "topline": {
+     "samples": 35,
+     "accepted": 19,
+     "median_residual_mm": 4.9,
+     "fitted": false
+    }
+   },
+   "contact_point_px": [
+    147.08166768289263,
+    79.08802747357912
+   ],
+   "face_centre_px": [
+    146.94050163260954,
+    77.09717745831156
+   ]
+  },
+  "44": {
+   "toe_mm": -6.4544531206386475,
+   "up_mm": 14.364824016371141,
+   "normal_mm": 49.26314787825084,
+   "anchor_px": [
+    149.64343350408635,
+    76.9510143483997
+   ],
+   "edges": {
+    "toe": {
+     "samples": 34,
+     "accepted": 2,
+     "predicted_blur_px": 0.34,
+     "median_contrast_dn": 18.1,
+     "carry_initialization": {
+      "from_frame": 43,
+      "toe_mm": -6.454,
+      "motion_source": "supplied_club_direction",
+      "velocity_mm_per_ms": [
+       7.582076,
+       -3.196769,
+       34.022331
+      ],
+      "direction_sigma_deg": 8.485281,
+      "sigma_mm": 17.135,
+      "sigma_source": "supplied_travel_times_direction_sigma"
+     },
+     "carried_from_frame": 43,
+     "carried_sigma_mm": 17.135
+    },
+    "sole": {
+     "samples": 38,
+     "accepted": 2,
+     "predicted_blur_px": 0.06,
+     "median_contrast_dn": 11.5
+    },
+    "shaft": {
+     "found": true,
+     "rows": 8,
+     "line_residual_px": 0.25,
+     "median_residual_px": 1.162,
+     "rows_kept": 4,
+     "weight": 0.179
+    },
+    "topline": {
+     "samples": 35,
+     "accepted": 0,
+     "median_residual_mm": null,
+     "fitted": false
+    }
+   },
+   "contact_point_px": [
+    147.08166768289263,
+    79.08802747357912
+   ],
+   "face_centre_px": [
+    146.94050163260954,
+    77.09717745831156
+   ]
+  }
+ }
+}

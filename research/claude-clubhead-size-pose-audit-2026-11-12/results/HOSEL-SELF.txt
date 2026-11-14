@@ -1,0 +1,24 @@
+SHOT 1   mark 12.3 / 23.9; with the fixed 61.0 mm: 13.5 / 22.3 (miss +1.2 / -1.5)
+   f40 (-12.9 ms): shaft, ferrule or the club's lower end not found
+   f41 (9.3 ms before mid-contact): ferrule to the club's lower end 31.7 rows observed, 37.6 on the model at 61.0 mm (0.609 rows per mm) -> H = 51.2 mm
+   f42 (5.7 ms before mid-contact): ferrule to the club's lower end 33.7 rows observed, 35.2 on the model at 61.0 mm (0.566 rows per mm) -> H = 58.4 mm
+   this swing's H: 54.8 mm (frames: 51.2 58.4; max - min 7.1) -> reading 10.9 / 16.2 (miss -1.4 / -7.6)
+
+SHOT 2   mark 43.3 / 12.4; with the fixed 61.0 mm: 42.1 / 11.8 (miss -1.2 / -0.6)
+   f40 (-9.7 ms): shaft, ferrule or the club's lower end not found
+   f41 (6.1 ms before mid-contact): ferrule to the club's lower end 30.7 rows observed, 30.4 on the model at 61.0 mm (0.495 rows per mm) -> H = 61.5 mm
+   this swing's H: 61.5 mm (frames: 61.5; max - min 0.0) -> reading 42.4 / 12.3 (miss -1.0 / -0.1)
+
+SHOT 3   mark 43.5 / 30.3; with the fixed 61.0 mm: 39.5 / 27.5 (miss -4.0 / -2.9)
+   f40 (-12.4 ms): shaft, ferrule or the club's lower end not found
+   f41 (8.8 ms before mid-contact): ferrule to the club's lower end 26.3 rows observed, 26.3 on the model at 61.0 mm (0.431 rows per mm) -> H = 60.8 mm
+   f42 (5.2 ms before mid-contact): ferrule to the club's lower end 30.9 rows observed, 24.9 on the model at 61.0 mm (0.407 rows per mm) -> H = 75.7 mm
+   this swing's H: 68.3 mm (frames: 60.8 75.7; max - min 15.0) -> reading 42.8 / 34.2 (miss -0.7 / +3.9)
+
+SHOT 4   mark 66.1 / 28.1; with the fixed 61.0 mm: 63.8 / 28.7 (miss -2.3 / +0.6)
+   f41 (11.4 ms before mid-contact): ferrule to the club's lower end 22.1 rows observed, 31.4 on the model at 61.0 mm (0.521 rows per mm) -> H = 43.0 mm
+   f42 (7.8 ms before mid-contact): ferrule to the club's lower end 28.5 rows observed, 29.6 on the model at 61.0 mm (0.486 rows per mm) -> H = 58.6 mm
+   f43 (4.2 ms before mid-contact): ferrule to the club's lower end 33.0 rows observed, 28.0 on the model at 61.0 mm (0.455 rows per mm) -> H = 72.0 mm
+   this swing's H: 58.6 mm (frames: 43.0 58.6 72.0; max - min 29.0) -> reading 62.8 / 26.1 (miss -3.3 / -2.0)
+
+RULE (written before running): (1) frames of one swing within 2 mm: worst 29.0 mm -> FAIL; (2) the four shots within 4 mm: 54.8 61.5 68.3 58.6, spread 13.5 -> FAIL; (3) no reading more than 1 mm farther from its mark: changes +5.8 -0.3 -1.0 +1.5 -> FAIL

@@ -1,0 +1,13 @@
+shot 1   frozen: centroid (171.4, 222.7) px -> 12.3 mm from the toe, 23.9 mm above the leading edge; blob touches its box on: right
+         flattened: centroid (165.4, 221.6) px -> 10.8, 24.9 (moves -1.5, +1.0 mm); touches its search region: yes
+         overlap of the two: centroid (167.5, 221.4) px -> 11.4, 24.7 (moves -0.9, +0.8 mm)
+shot 2   frozen: centroid (355.5, 185.1) px -> 43.3 mm from the toe, 12.4 mm above the leading edge; blob touches its box on: right, bottom
+         flattened: centroid (354.7, 196.4) px -> 42.3, 9.3 (moves -1.1, -3.1 mm); touches its search region: yes
+         overlap of the two: centroid (356.6, 186.5) px -> 43.5, 11.9 (moves +0.2, -0.5 mm)
+         box centre by eye (350.5, 174.0) px -> 42.8, 15.8 (moves -0.6, +3.5 mm)
+shot 3   frozen: centroid (296.9, 145.5) px -> 43.5 mm from the toe, 30.3 mm above the leading edge; blob touches its box on: left, bottom
+         flattened: centroid (289.8, 133.5) px -> 42.8, 34.3 (moves -0.7, +3.9 mm); touches its search region: yes
+         overlap of the two: centroid (299.1, 140.6) px -> 44.6, 31.4 (moves +1.1, +1.1 mm)
+shot 4   frozen: centroid (429.9, 185.0) px -> 66.1 mm from the toe, 28.1 mm above the leading edge; blob touches its box on: no side
+         flattened: centroid (430.1, 184.9) px -> 66.1, 28.1 (moves +0.1, +0.0 mm); touches its search region: yes
+         overlap of the two: centroid (430.1, 184.9) px -> 66.1, 28.1 (moves +0.1, +0.0 mm)

@@ -1,0 +1,23 @@
+f44 (+1.179 ms): raw fit centre (190.81, 85.27) r 11.72 px over 31 rays, rms 0.27 | resting ball by the same routine: (186.14, 96.91) r 13.90 (detector: 185.63, 95.72, r 11.90) | corrected centre (190.30, 84.08), radius 10.03 px
+f45 (+4.796 ms): raw fit centre (200.65, 63.29) r 9.92 px over 41 rays, rms 0.34 | resting ball by the same routine: (186.16, 94.12) r 11.46 (detector: 185.63, 95.72, r 11.90) | corrected centre (200.12, 64.89), radius 10.31 px
+f46 (+8.414 ms): raw fit centre (209.04, 45.85) r 9.53 px over 41 rays, rms 0.27 | resting ball by the same routine: (186.16, 94.12) r 11.46 (detector: 185.63, 95.72, r 11.90) | corrected centre (208.51, 47.45), radius 9.90 px
+
+resting ball: (-65.6, 5.7, 1780.5) mm; ball speed 36.51 m/s; flight time to f44 0.954 ms (contact 1.179 ms before the frame, less half of 0.45 ms on the face)
+BALL ON FRAME 44: (-58.2, -15.2, 1807.3) mm in the camera frame = 7.5 mm right, 21.0 mm up, 26.8 mm farther than at rest; 34.8 mm from rest in all
+   implied launch in the camera's level frame: 37.0 deg up, 15.5 deg to the right of the camera axis (radar record: 19.6 deg up, 4.9 deg horizontal, uncalibrated)
+   apparent size check: radius 10.03 px puts the ball at 2128 mm; solved depth 1807 mm (difference +320 mm = +17.7 %; 0.3 px of radius is 54 mm)
+
+CHECK: the same straight flight, carried to the later frames, against the measured centres there
+   f45 (+4.796 ms): predicted centre (206.82, 42.90) px, measured (200.12, 64.89): off by -6.70, +21.99 px = 43.9 mm across the view | predicted radius 11.18 px, measured 10.31
+   f46 (+8.414 ms): predicted centre (221.67, 5.88) px, measured (208.51, 47.45): off by -13.16, +41.57 px = 87.7 mm across the view | predicted radius 10.62 px, measured 9.90
+
+SENSITIVITY of the ball's position on f44 (direction from the camera fixed by the pixels; these move it along that ray)
+   contact 0.14 ms earlier                       +6.4 mm in depth, +0.1 mm up, -0.2 mm right
+   contact 0.14 ms later                         -7.1 mm in depth, -0.1 mm up, +0.2 mm right
+   contact duration 0.35 ms                      +2.3 mm in depth, +0.0 mm up, -0.1 mm right
+   contact duration 0.55 ms                      -2.4 mm in depth, -0.0 mm up, +0.1 mm right
+   speed +6 % (radar reads along its own line)   +2.7 mm in depth, +0.0 mm up, -0.1 mm right
+   speed -3 %                                    -1.4 mm in depth, -0.0 mm up, +0.0 mm right
+   centre 0.3 px right:  -0.2 mm in depth, -0.0 mm up, +0.5 mm right
+   centre 0.3 px down:  +0.4 mm in depth, -0.5 mm up, -0.0 mm right
+   band drawn in the viewer (timing 0.19 ms and speed together): 11 mm nearer to 12 mm farther along the ray

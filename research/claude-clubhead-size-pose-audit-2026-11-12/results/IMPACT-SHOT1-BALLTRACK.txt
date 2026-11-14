@@ -1,0 +1,16 @@
+SHOT 1 IMPACT POINT BY CONTACT INSTANT (research reading; development shot). Club placements unchanged from impact1.py.
+frame 43 at -2.438 ms and frame 44 at +1.179 ms on the application's clock
+
+application's contact instant: mid-contact +0.00 ms; frame 43 is 2.44 ms before it, frame 44 1.18 ms after
+   all eight: toe-ward +22.5 .. +25.6 mm (median +24.3); up +0.3 .. +5.4 mm (median +2.7)
+   trace anchor, f44 by head edge, slowed: +22.5 toe-ward, +3.9 up
+
+ball track, pixels + radar speed: mid-contact -0.43 ms; frame 43 is 2.01 ms before it, frame 44 1.61 ms after
+   all eight: toe-ward +26.1 .. +28.3 mm (median +27.3); up -0.3 .. +4.2 mm (median +1.8)
+   trace anchor, f44 by head edge, slowed: +26.1 toe-ward, +2.8 up
+
+ball track, pixels only: mid-contact -0.28 ms; frame 43 is 2.16 ms before it, frame 44 1.46 ms after
+   all eight: toe-ward +24.8 .. +27.3 mm (median +26.2); up -0.1 .. +4.6 mm (median +2.1)
+   trace anchor, f44 by head edge, slowed: +24.8 toe-ward, +3.2 up
+
+The photographed mark (results/PHOTO-SHOT1.txt, measured earlier, not used here): +26.9 .. +29.3 toe-ward (median +27.7), -0.9 .. +0.9 up (median 0.0).

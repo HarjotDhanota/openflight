@@ -1,0 +1,19 @@
+f44 (+1.179 ms from the application's contact): ball centre moved +4.43, -17.82 px from rest; top edge moved -9.44 px; 31 edge rays, circle rms 0.29 px
+f45 (+4.796 ms from the application's contact): ball centre moved +14.50, -30.84 px from rest; top edge moved -29.24 px; 41 edge rays, circle rms 0.33 px
+f46 (+8.414 ms from the application's contact): ball centre moved +22.89, -48.17 px from rest; top edge moved -46.31 px; 41 edge rays, circle rms 0.22 px
+image speed f45 -> f46: 8.39 px right and 17.33 px up per frame (3.617 ms); f44 -> f45: 10.07 right
+
+PIXELS ONLY: mid-contact -0.28 ms from the application's contact instant (+-0.15, formal); ball speed 54.9 m/s (+-14.6); launch 12.9 deg above the camera axis, 4.2 deg right of it; chi2 0.2 on 2
+   f44: ball at (-59.9, -12.2, 1858.3) mm = 5.7 mm right, 17.9 mm up, 77.8 mm farther than at rest; fit minus measured: +0.19, +0.09 px
+   f45: ball at (-45.7, -56.6, 2051.4) mm = 19.9 mm right, 62.3 mm up, 270.9 mm farther than at rest; fit minus measured: +0.08, +0.05 px
+   f46: ball at (-31.5, -101.0, 2244.6) mm = 34.1 mm right, 106.7 mm up, 464.1 mm farther than at rest; fit minus measured: -0.07, -0.04 px
+
+PIXELS + RADAR SPEED: mid-contact -0.43 ms from the application's contact instant (+-0.10, formal); ball speed 37.0 m/s (+-2.2); launch 17.8 deg above the camera axis, 6.7 deg right of it; chi2 1.9 on 3
+   f44: ball at (-59.0, -12.5, 1836.9) mm = 6.6 mm right, 18.2 mm up, 56.4 mm farther than at rest; fit minus measured: +0.32, -0.32 px
+   f45: ball at (-44.1, -53.4, 1963.4) mm = 21.6 mm right, 59.2 mm up, 182.9 mm farther than at rest; fit minus measured: -0.08, +0.40 px
+   f46: ball at (-29.2, -94.4, 2089.9) mm = 36.5 mm right, 100.1 mm up, 309.4 mm farther than at rest; fit minus measured: +0.02, -0.22 px
+
+COMPARE  radar record: speed 36.5 m/s, launch 19.6 deg, horizontal 4.9 deg (uncalibrated; the session aim is +2.07 deg)
+         application's contact instant: 0 by definition, its own sigma 0.14 ms. The ball's track puts mid-contact -0.28 ms (pixels only) or -0.43 ms (with radar speed) from it.
+         frame 43 is then 2.01 ms before mid-contact (application: 2.44) and frame 44 1.61 ms after (application: 1.18).
+note: launch angles here are against the camera's axis, which the application treats as level; a camera pitched down by p degrees lowers them by p.

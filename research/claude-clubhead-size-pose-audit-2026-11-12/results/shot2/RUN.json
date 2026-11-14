@@ -1,0 +1,18 @@
+{
+ "application_head": "0fa9870bec40d50c25d6da00b06850afea94c4c4",
+ "application_dirty": "",
+ "args": [
+  "F:\\Coding\\OpenFlight\\research\\fusion-timing-replay-2026-11-05\\run-002\\package\\sessions\\harjot-outdoor-test-2\\arm6\\paired\\run-01\\session_20261027_170621_arm6.jsonl",
+  "2",
+  "--camera",
+  "--iwr",
+  "--full-shot",
+  "--timing-coverage",
+  "--output",
+  "F:\\Coding\\OpenFlight\\research\\claude-clubhead-size-pose-audit-2026-11-12\\results\\shot2\\replay.json"
+ ],
+ "returncode": 0,
+ "exception": null,
+ "elapsed_s": 9.14,
+ "place_clip_calls": 0
+}

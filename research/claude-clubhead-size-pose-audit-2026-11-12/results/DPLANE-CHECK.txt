@@ -1,0 +1,42 @@
+SHOT 1  (D-plane method: d_plane_inversion, model e2-2026-10-20-fitted)
+   input  club_path             10.09  estimated  source camera_fused_chained  [experimental]
+   input  attack_angle          -8.65  estimated  source camera_fused_chained  [experimental]
+   input  launch_horizontal      4.94  estimated  source radar (azimuth uncalibrated)  [experimental]
+   input  launch_vertical       19.59  estimated  source radar  [experimental]
+   input  club_speed_mph         None  measured   source None
+   output face_angle             3.46  estimated  rigid-body relation not used: measured spin confidence below 0.7
+   output dynamic_loft          26.65  estimated  rigid-body relation not used: measured spin confidence below 0.7
+   output spin_axis             -9.08  estimated  no impact location: centre-face strike assumed, no gear effect
+   output face_to_path          -6.63  estimated  
+   used by the placement: face +1.40 (sigma 6), loft 26.65 (sigma 6), roll -3.52 (sigma 4)
+   MEASURED HERE, ball track: launch 17.8 deg above the camera axis, 6.7 deg right of it, 37.0 m/s (radar 36.5)
+   MEASURED HERE, club descent: the ferrule dropped 19.5 mm over 117 mm of travel between frames 42 and 43 -> about -9.6 deg downward (the D-plane step was given -8.65)
+
+SHOT 3  (D-plane method: d_plane_inversion, model e2-2026-10-20-fitted)
+   input  club_path             14.63  estimated  source camera_fused_chained  [experimental]
+   input  attack_angle           5.24  estimated  source camera_fused_chained  [experimental]
+   input  launch_horizontal      8.43  estimated  source camera_assisted_experimental
+   input  launch_vertical       18.64  estimated  source camera_fallback  [experimental]
+   input  club_speed_mph         None  measured   source None
+   output face_angle             6.96  estimated  rigid-body relation not used: spin not measured
+   output dynamic_loft          21.56  estimated  rigid-body relation not used: spin not measured
+   output spin_axis            -21.27  estimated  contact flagged: collision spin unvalidated on mishits; no impact location: centre-face st
+   output face_to_path          -7.67  estimated  
+   used by the placement: face +4.89 (sigma 6), loft 21.56 (sigma 6), roll +1.57 (sigma 4)
+   MEASURED HERE, ball track: launch 21.4 deg above the camera axis, 6.7 deg right of it, 37.7 m/s (radar 37.6)
+   MEASURED HERE, club descent: the ferrule dropped 19.0 mm over 127 mm of travel between frames 42 and 43 -> about -8.6 deg downward (the D-plane step was given 5.24)
+
+SHOT 4  (D-plane method: d_plane_inversion, model e2-2026-10-20-fitted)
+   input  club_path             10.24  estimated  source camera_fused_chained  [experimental]
+   input  attack_angle          -2.24  estimated  source camera_fused_chained  [experimental]
+   input  launch_horizontal     10.45  estimated  source camera_assisted_experimental
+   input  launch_vertical       25.90  estimated  source camera_fallback  [experimental]
+   input  club_speed_mph         None  measured   source None
+   output face_angle            10.52  estimated  rigid-body relation not used: measured spin confidence below 0.7
+   output dynamic_loft          32.90  estimated  rigid-body relation not used: measured spin confidence below 0.7
+   output spin_axis              0.38  estimated  no impact location: centre-face strike assumed, no gear effect
+   output face_to_path           0.28  estimated  
+   used by the placement: face +8.45 (sigma 6), loft 32.90 (sigma 6), roll -1.00 (sigma 6)
+   MEASURED HERE, ball track: launch 30.3 deg above the camera axis, 8.5 deg right of it, 34.2 m/s (radar 33.9)
+   MEASURED HERE, club descent: the ferrule dropped 18.9 mm over 129 mm of travel between frames 43 and 44 -> about -8.4 deg downward (the D-plane step was given -2.24)
+

@@ -1,0 +1,14 @@
+score lines: 13 fitted, direction 24.6 deg, spacing 8.59 px; they run at 16.7 deg to the image plane (the toe end is nearer the camera); spacing shows no measurable perspective across the lines (c = -0.00028 +- 0.00028): taken as none
+scale: toe height 55.6 mm set equal to the mean of the outer and inner outline heights, which are then 56.8 and 54.4 mm; the face is 305 mm from the lens, 3.28 px per mm
+score lines in mm: spacing 2.63, longest 54.9 (line 12 of 13 from the top), its toe end 18.3 mm from the toe extreme
+face centre by the rule (middle of the longest line; midway between face bottom and top line there): 45.8 mm from the toe extreme, 23.4 mm above the leading edge (generic drawing: 44.2, 24.6)
+outline: 36 points; reaches 84.1 mm from the toe along the top line and 68.2 mm along the sole; toe peak 55.6 mm above the leading edge, 16.8 mm from the toe; top line falls 26.4 deg toward the heel (generic 24.9)
+   top line 40 mm from the toe: 46.5 mm above the leading edge (generic at size 1: 51.4)
+   top line 60 mm from the toe: 37.1 mm above the leading edge (generic at size 1: 42.4)
+   top line 70 mm from the toe: 32.0 mm above the leading edge (generic at size 1: 37.3)
+   top line 80 mm from the toe: 26.5 mm above the leading edge (generic at size 1: 33.0)
+
+hosel in the photo: 47.4 px across = 14.5 mm at the face's scale (spec OD 13.5 mm; the hosel stands nearer the lens than the face, so it should read a little large)
+shaft axis meets the ground line: USED 80.1 mm from the toe extreme = the spec blade length, read as toe to the hosel centreline at the ground (Maltby's stated datum for its other horizontal measures)
+   check from the photo's hosel edges, in 3-D with the spec lie and loft: 85.2 mm (the model axis at 80.1 misses the photographed axis by 11.8 px); generic drawing 78.2
+   heel height by the spec 28.1 mm; this model's top line is that high 77.0 mm from the toe (its last traced point is 84.1 mm from the toe at 24.5 mm)

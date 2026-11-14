@@ -1,0 +1,5844 @@
+{
+ "m3": {
+  "1": [
+   {
+    "frame": 41,
+    "t_ms": -9.668940448375821,
+    "depth_mm": 1451.1385885913478,
+    "ferrule": [
+     87.80536573976825,
+     45.0
+    ],
+    "top_y": 40.5,
+    "bottom_y": 78.5,
+    "toe_x": 142.5,
+    "ferrule_to_top_mm": -6.530122995648766,
+    "ferrule_to_bottom_mm": 48.613137856496365,
+    "height_mm": 55.14326085214513,
+    "height_ball": 1.5968312073583117,
+    "ferrule_to_bottom_ball": 1.4077327749079853,
+    "ferrule_to_top_ball": -0.1890984324503264,
+    "top_above_ball_bottom_mm": 97.39840116335813,
+    "bottom_below_ball_bottom_mm": -42.255140311213
+   },
+   {
+    "frame": 42,
+    "t_ms": -6.053940448375812,
+    "depth_mm": 1565.202845212254,
+    "ferrule": [
+     109.96767152667677,
+     64.0
+    ],
+    "top_y": 64.5,
+    "bottom_y": 99.5,
+    "toe_x": 167.5,
+    "ferrule_to_top_mm": 0.7826013443459926,
+    "ferrule_to_bottom_mm": 55.56469544856547,
+    "height_mm": 54.78209410421948,
+    "height_ball": 1.4707655857247608,
+    "ferrule_to_bottom_ball": 1.491776522663686,
+    "ferrule_to_top_ball": 0.021010936938925154,
+    "top_above_ball_bottom_mm": 67.48937068954443,
+    "bottom_below_ball_bottom_mm": -12.707276585324946
+   },
+   {
+    "frame": 43,
+    "t_ms": -2.4379404483758265,
+    "depth_mm": 1679.2986548778679,
+    "ferrule": [
+     127.1397326811699,
+     76.0
+    ],
+    "top_y": 79.5,
+    "bottom_y": 110.5,
+    "toe_x": 185.5,
+    "ferrule_to_top_mm": 5.877544704318067,
+    "ferrule_to_bottom_mm": 57.93579779970666,
+    "height_mm": 52.058253095388594,
+    "height_ball": 1.3026780902133597,
+    "ferrule_to_bottom_ball": 1.4497546487858357,
+    "ferrule_to_top_ball": 0.1470765585724761,
+    "top_above_ball_bottom_mm": 47.21954607839224,
+    "bottom_below_ball_bottom_mm": 4.838707016996355
+   },
+   {
+    "frame": 44,
+    "t_ms": 1.1790595516241922,
+    "depth_mm": 1793.4260175881911,
+    "ferrule": [
+     142.69258269963308,
+     81.0
+    ],
+    "top_y": 71.5,
+    "bottom_y": 109.5,
+    "toe_x": 203.5,
+    "ferrule_to_top_mm": -17.03754546333327,
+    "ferrule_to_bottom_mm": 51.112636389999814,
+    "height_mm": 68.15018185333308,
+    "height_ball": 1.5968312073583117,
+    "ferrule_to_bottom_ball": 1.1976234055187338,
+    "ferrule_to_top_ball": -0.39920780183957794,
+    "top_above_ball_bottom_mm": 64.77605573138318,
+    "bottom_below_ball_bottom_mm": 3.374126121949902
+   }
+  ],
+  "3": [
+   {
+    "frame": 41,
+    "t_ms": -9.017496818116427,
+    "depth_mm": 1929.763110191543,
+    "ferrule": [
+     99.32214550342047,
+     43.5
+    ],
+    "top_y": 41.5,
+    "bottom_y": 72.5,
+    "toe_x": 148.5,
+    "ferrule_to_top_mm": -3.859525834430503,
+    "ferrule_to_bottom_mm": 55.96312459924229,
+    "height_mm": 59.8226504336728,
+    "height_ball": 1.654302881880239,
+    "ferrule_to_bottom_ball": 1.547573663694417,
+    "ferrule_to_top_ball": -0.10672921818582187,
+    "top_above_ball_bottom_mm": 83.92010612128571,
+    "bottom_below_ball_bottom_mm": -24.097455687612918
+   },
+   {
+    "frame": 42,
+    "t_ms": -5.401496818116442,
+    "depth_mm": 2052.7878607815164,
+    "ferrule": [
+     111.18560460264315,
+     59.5
+    ],
+    "top_y": 62.5,
+    "bottom_y": 90.5,
+    "toe_x": 159.5,
+    "ferrule_to_top_mm": 6.158362966508253,
+    "ferrule_to_bottom_mm": 63.63641732058528,
+    "height_mm": 57.47805435407703,
+    "height_ball": 1.494209054601506,
+    "ferrule_to_bottom_ball": 1.654302881880239,
+    "ferrule_to_top_ball": 0.1600938272787328,
+    "top_above_ball_bottom_mm": 46.16157441670047,
+    "bottom_below_ball_bottom_mm": 11.316479937376565
+   },
+   {
+    "frame": 43,
+    "t_ms": -1.7844968181164234,
+    "depth_mm": 2175.8466337029595,
+    "ferrule": [
+     117.15176669918915,
+     68.5
+    ],
+    "top_y": 59.5,
+    "bottom_y": 89.5,
+    "toe_x": 165.5,
+    "ferrule_to_top_mm": -19.582617745064862,
+    "ferrule_to_bottom_mm": 45.69277473848468,
+    "height_mm": 65.27539248354954,
+    "height_ball": 1.600938272787328,
+    "ferrule_to_bottom_ball": 1.1206567909511296,
+    "ferrule_to_top_ball": -0.4802814818361984,
+    "top_above_ball_bottom_mm": 55.45636829100511,
+    "bottom_below_ball_bottom_mm": 9.819024192544424
+   },
+   {
+    "frame": 44,
+    "t_ms": 1.8325031818835669,
+    "depth_mm": 2298.9054066244016,
+    "ferrule": [
+     119.89747611905709,
+     67.0
+    ],
+    "top_y": 45.5,
+    "bottom_y": 88.5,
+    "toe_x": 169.5,
+    "ferrule_to_top_mm": -49.4264612997785,
+    "ferrule_to_bottom_mm": 49.4264612997785,
+    "height_mm": 98.852922599557,
+    "height_ball": 2.29467819099517,
+    "ferrule_to_bottom_ball": 1.147339095497585,
+    "ferrule_to_top_ball": -1.147339095497585,
+    "top_above_ball_bottom_mm": 90.77747167307587,
+    "bottom_below_ball_bottom_mm": 8.075450926481146
+   }
+  ],
+  "4": [
+   {
+    "frame": 42,
+    "t_ms": -7.76588322328962,
+    "depth_mm": 1796.5915032035603,
+    "ferrule": [
+     126.14497410075674,
+     44.0
+    ],
+    "top_y": 43.5,
+    "bottom_y": 76.5,
+    "toe_x": 173.5,
+    "ferrule_to_top_mm": -0.898295661772214,
+    "ferrule_to_bottom_mm": 58.38921801519391,
+    "height_mm": 59.28751367696612,
+    "height_ball": 1.639627649414825,
+    "ferrule_to_bottom_ball": 1.614784806241873,
+    "ferrule_to_top_ball": -0.024842843172951892,
+    "top_above_ball_bottom_mm": 86.0181740619923,
+    "bottom_below_ball_bottom_mm": -26.730660385026173
+   },
+   {
+    "frame": 43,
+    "t_ms": -4.14888322328963,
+    "depth_mm": 1924.055419698551,
+    "ferrule": [
+     135.4433538716977,
+     62.0
+    ],
+    "top_y": 65.5,
+    "bottom_y": 95.5,
+    "toe_x": 184.5,
+    "ferrule_to_top_mm": 6.7341932955256,
+    "ferrule_to_bottom_mm": 64.45585011431645,
+    "height_mm": 57.721656818790855,
+    "height_ball": 1.4905705903771136,
+    "ferrule_to_bottom_ball": 1.664470492587777,
+    "ferrule_to_top_ball": 0.17389990221066326,
+    "top_above_ball_bottom_mm": 49.79174499598805,
+    "bottom_below_ball_bottom_mm": 7.929911822802807
+   },
+   {
+    "frame": 44,
+    "t_ms": -0.530883223289635,
+    "depth_mm": 2051.5545764248095,
+    "ferrule": [
+     138.58827404241734,
+     71.5
+    ],
+    "top_y": 63.5,
+    "bottom_y": 94.5,
+    "toe_x": 188.5,
+    "ferrule_to_top_mm": -16.41243497015498,
+    "ferrule_to_bottom_mm": 47.18575053919557,
+    "height_mm": 63.59818550935054,
+    "height_ball": 1.5402562767230172,
+    "ferrule_to_bottom_ball": 1.142770785955787,
+    "ferrule_to_top_ball": -0.3974854907672303,
+    "top_above_ball_bottom_mm": 57.19434575623177,
+    "bottom_below_ball_bottom_mm": 6.403839753118776
+   },
+   {
+    "frame": 45,
+    "t_ms": 3.0801167767103834,
+    "depth_mm": 2178.8070515321956,
+    "ferrule": [
+     137.28522343633296,
+     71.5
+    ],
+    "top_y": 45.5,
+    "bottom_y": 93.5,
+    "toe_x": 195.5,
+    "ferrule_to_top_mm": -56.648977674939324,
+    "ferrule_to_bottom_mm": 47.933750340333276,
+    "height_mm": 104.58272801527261,
+    "height_ball": 2.3849129446033817,
+    "ferrule_to_bottom_ball": 1.0930850996098833,
+    "ferrule_to_top_ball": -1.2918278449934983,
+    "top_above_ball_bottom_mm": 99.96048194430558,
+    "bottom_below_ball_bottom_mm": 4.622246070967016
+   }
+  ]
+ },
+ "m4": {
+  "1": {
+   "IN-AIR f42 floor 8": {
+    "obs": {
+     "x_cut": 124.93610334014886,
+     "toe_x": 167.5,
+     "top_y": 64.5,
+     "bottom_y": 99.5
+    },
+    "line": [
+     81.9686648894956,
+     0.4374844787059557,
+     0.19855233198879774,
+     60
+    ],
+    "table": {
+     "supplied": {
+      "app_pose": {
+       "xor": 314.4375,
+       "overhang": 294.1875,
+       "uncovered": 20.25,
+       "model": 1299.9375,
+       "observed": 1026.0,
+       "iou": 0.7618236046016191
+      },
+      "app_pose_visible": {
+       "xor": 314.4375,
+       "overhang": 294.1875,
+       "uncovered": 20.25,
+       "model": 1299.9375,
+       "observed": 1026.0,
+       "iou": 0.7618236046016191
+      },
+      "full": {
+       "xor": 215.5,
+       "overhang": 208.625,
+       "uncovered": 6.875,
+       "model": 1227.75,
+       "observed": 1026.0,
+       "iou": 0.8254530727953832,
+       "dx": -3.25,
+       "dy": 1.5,
+       "model_bottom_y": 98.43949677087262,
+       "model_top_y": 65.46258661827184,
+       "model_toe_x": 167.1988879413647
+      },
+      "visible": {
+       "xor": 216.4375,
+       "overhang": 186.0625,
+       "uncovered": 30.375,
+       "model": 1181.6875,
+       "observed": 1026.0,
+       "iou": 0.8214304130356315,
+       "dx": -3.5,
+       "dy": 3.25,
+       "model_bottom_y": 100.18949677087262,
+       "model_top_y": 67.21258661827184,
+       "model_toe_x": 166.9488879413647
+      }
+     },
+     "size 0.85": {
+      "app_pose": {
+       "xor": 263.5625,
+       "overhang": 111.875,
+       "uncovered": 151.6875,
+       "model": 986.1875,
+       "observed": 1026.0,
+       "iou": 0.7683730638251126
+      },
+      "app_pose_visible": {
+       "xor": 263.5625,
+       "overhang": 111.875,
+       "uncovered": 151.6875,
+       "model": 986.1875,
+       "observed": 1026.0,
+       "iou": 0.7683730638251126
+      },
+      "full": {
+       "xor": 171.4375,
+       "overhang": 72.0,
+       "uncovered": 99.4375,
+       "model": 998.5625,
+       "observed": 1026.0,
+       "iou": 0.8438638433515483,
+       "dx": 0.75,
+       "dy": 2.75,
+       "model_bottom_y": 97.53883727975274,
+       "model_top_y": 69.51842776065398,
+       "model_toe_x": 166.95404868025955
+      },
+      "visible": {
+       "xor": 171.4375,
+       "overhang": 72.0,
+       "uncovered": 99.4375,
+       "model": 998.5625,
+       "observed": 1026.0,
+       "iou": 0.8438638433515483,
+       "dx": 0.75,
+       "dy": 2.75,
+       "model_bottom_y": 97.53883727975274,
+       "model_top_y": 69.51842776065398,
+       "model_toe_x": 166.95404868025955
+      }
+     },
+     "size 0.90": {
+      "app_pose": {
+       "xor": 244.3125,
+       "overhang": 152.25,
+       "uncovered": 92.0625,
+       "model": 1086.1875,
+       "observed": 1026.0,
+       "iou": 0.7926479949077021
+      },
+      "app_pose_visible": {
+       "xor": 244.3125,
+       "overhang": 152.25,
+       "uncovered": 92.0625,
+       "model": 1086.1875,
+       "observed": 1026.0,
+       "iou": 0.7926479949077021
+      },
+      "full": {
+       "xor": 159.0,
+       "overhang": 107.3125,
+       "uncovered": 51.6875,
+       "model": 1081.625,
+       "observed": 1026.0,
+       "iou": 0.8597033033695473,
+       "dx": -0.25,
+       "dy": 2.0,
+       "model_bottom_y": 97.50622395178787,
+       "model_top_y": 67.8340492240008,
+       "model_toe_x": 167.36885122260503
+      },
+      "visible": {
+       "xor": 159.0,
+       "overhang": 107.3125,
+       "uncovered": 51.6875,
+       "model": 1081.625,
+       "observed": 1026.0,
+       "iou": 0.8597033033695473,
+       "dx": -0.25,
+       "dy": 2.0,
+       "model_bottom_y": 97.50622395178787,
+       "model_top_y": 67.8340492240008,
+       "model_toe_x": 167.36885122260503
+      }
+     },
+     "size 0.95": {
+      "app_pose": {
+       "xor": 263.5,
+       "overhang": 214.1875,
+       "uncovered": 49.3125,
+       "model": 1190.875,
+       "observed": 1026.0,
+       "iou": 0.7875321271985083
+      },
+      "app_pose_visible": {
+       "xor": 263.5,
+       "overhang": 214.1875,
+       "uncovered": 49.3125,
+       "model": 1190.875,
+       "observed": 1026.0,
+       "iou": 0.7875321271985083
+      },
+      "full": {
+       "xor": 169.5,
+       "overhang": 152.0625,
+       "uncovered": 17.4375,
+       "model": 1160.625,
+       "observed": 1026.0,
+       "iou": 0.8561196880471112,
+       "dx": -1.5,
+       "dy": 1.5,
+       "model_bottom_y": 97.72311027440149,
+       "model_top_y": 66.39876927821811,
+       "model_toe_x": 167.53379763565798
+      },
+      "visible": {
+       "xor": 169.5,
+       "overhang": 152.0625,
+       "uncovered": 17.4375,
+       "model": 1160.625,
+       "observed": 1026.0,
+       "iou": 0.8561196880471112,
+       "dx": -1.5,
+       "dy": 1.5,
+       "model_bottom_y": 97.72311027440149,
+       "model_top_y": 66.39876927821811,
+       "model_toe_x": 167.53379763565798
+      }
+     },
+     "size 1.05": {
+      "app_pose": {
+       "xor": 390.1875,
+       "overhang": 387.6875,
+       "uncovered": 2.5,
+       "model": 1411.1875,
+       "observed": 1026.0,
+       "iou": 0.7239931031433751
+      },
+      "app_pose_visible": {
+       "xor": 390.1875,
+       "overhang": 387.6875,
+       "uncovered": 2.5,
+       "model": 1411.1875,
+       "observed": 1026.0,
+       "iou": 0.7239931031433751
+      },
+      "full": {
+       "xor": 279.625,
+       "overhang": 271.9375,
+       "uncovered": 7.6875,
+       "model": 1290.25,
+       "observed": 1026.0,
+       "iou": 0.7845620455530409,
+       "dx": -5.0,
+       "dy": 1.5,
+       "model_bottom_y": 99.15538396375086,
+       "model_top_y": 64.52549993660757,
+       "model_toe_x": 166.864122161676
+      },
+      "visible": {
+       "xor": 226.4375,
+       "overhang": 183.375,
+       "uncovered": 43.0625,
+       "model": 1166.3125,
+       "observed": 1026.0,
+       "iou": 0.812764857881137,
+       "dx": -5.0,
+       "dy": 4.75,
+       "model_bottom_y": 102.40538396375086,
+       "model_top_y": 67.77549993660757,
+       "model_toe_x": 166.864122161676
+      }
+     },
+     "size 1.10": {
+      "app_pose": {
+       "xor": 507.0,
+       "overhang": 506.5625,
+       "uncovered": 0.4375,
+       "model": 1532.125,
+       "observed": 1026.0,
+       "iou": 0.6691815178826312
+      },
+      "app_pose_visible": {
+       "xor": 507.0,
+       "overhang": 506.5625,
+       "uncovered": 0.4375,
+       "model": 1532.125,
+       "observed": 1026.0,
+       "iou": 0.6691815178826312
+      },
+      "full": {
+       "xor": 346.875,
+       "overhang": 334.875,
+       "uncovered": 12.0,
+       "model": 1348.875,
+       "observed": 1026.0,
+       "iou": 0.7451088454119592,
+       "dx": -7.0,
+       "dy": 1.5,
+       "model_bottom_y": 99.8707723748577,
+       "model_top_y": 63.58750792314431,
+       "model_toe_x": 166.2795003185472
+      },
+      "visible": {
+       "xor": 236.25,
+       "overhang": 188.9375,
+       "uncovered": 47.3125,
+       "model": 1167.625,
+       "observed": 1026.0,
+       "iou": 0.8055455527547714,
+       "dx": -6.25,
+       "dy": 6.0,
+       "model_bottom_y": 104.3707723748577,
+       "model_top_y": 68.0875079231443,
+       "model_toe_x": 167.0295003185472
+      }
+     },
+     "size 1.15": {
+      "app_pose": {
+       "xor": 629.3125,
+       "overhang": 629.3125,
+       "uncovered": 0.0,
+       "model": 1655.3125,
+       "observed": 1026.0,
+       "iou": 0.6198225410609779
+      },
+      "app_pose_visible": {
+       "xor": 617.5625,
+       "overhang": 617.5625,
+       "uncovered": 0.0,
+       "model": 1643.5625,
+       "observed": 1026.0,
+       "iou": 0.624253717154048
+      },
+      "full": {
+       "xor": 415.125,
+       "overhang": 403.3125,
+       "uncovered": 11.8125,
+       "model": 1417.5,
+       "observed": 1026.0,
+       "iou": 0.7095631641086186,
+       "dx": -8.5,
+       "dy": 1.75,
+       "model_bottom_y": 100.83566252528765,
+       "model_top_y": 62.89860926526853,
+       "model_toe_x": 166.19502243393805
+      },
+      "visible": {
+       "xor": 243.625,
+       "overhang": 191.0625,
+       "uncovered": 52.5625,
+       "model": 1164.5,
+       "observed": 1026.0,
+       "iou": 0.7998253992707852,
+       "dx": -7.5,
+       "dy": 7.25,
+       "model_bottom_y": 106.33566252528765,
+       "model_top_y": 68.39860926526853,
+       "model_toe_x": 167.19502243393805
+      }
+     },
+     "face -10": {
+      "app_pose": {
+       "xor": 344.75,
+       "overhang": 324.125,
+       "uncovered": 20.625,
+       "model": 1329.5,
+       "observed": 1026.0,
+       "iou": 0.744653272845107
+      },
+      "app_pose_visible": {
+       "xor": 344.75,
+       "overhang": 324.125,
+       "uncovered": 20.625,
+       "model": 1329.5,
+       "observed": 1026.0,
+       "iou": 0.744653272845107
+      },
+      "full": {
+       "xor": 222.8125,
+       "overhang": 213.625,
+       "uncovered": 9.1875,
+       "model": 1230.4375,
+       "observed": 1026.0,
+       "iou": 0.8202581425834425,
+       "dx": -4.5,
+       "dy": 1.5,
+       "model_bottom_y": 98.43255113211416,
+       "model_top_y": 65.54471368991153,
+       "model_toe_x": 166.08428016233614
+      },
+      "visible": {
+       "xor": 215.1875,
+       "overhang": 179.3125,
+       "uncovered": 35.875,
+       "model": 1169.4375,
+       "observed": 1026.0,
+       "iou": 0.8214674617578429,
+       "dx": -5.0,
+       "dy": 3.5,
+       "model_bottom_y": 100.43255113211416,
+       "model_top_y": 67.54471368991153,
+       "model_toe_x": 165.58428016233614
+      }
+     },
+     "face +10": {
+      "app_pose": {
+       "xor": 318.0,
+       "overhang": 297.5,
+       "uncovered": 20.5,
+       "model": 1303.0,
+       "observed": 1026.0,
+       "iou": 0.7597279939554212
+      },
+      "app_pose_visible": {
+       "xor": 318.0,
+       "overhang": 297.5,
+       "uncovered": 20.5,
+       "model": 1303.0,
+       "observed": 1026.0,
+       "iou": 0.7597279939554212
+      },
+      "full": {
+       "xor": 238.75,
+       "overhang": 229.1875,
+       "uncovered": 9.5625,
+       "model": 1245.625,
+       "observed": 1026.0,
+       "iou": 0.8097893740974954,
+       "dx": -2.5,
+       "dy": 1.0,
+       "model_bottom_y": 97.94740785601103,
+       "model_top_y": 64.88839918385324,
+       "model_toe_x": 167.17198792069834
+      },
+      "visible": {
+       "xor": 236.0625,
+       "overhang": 184.375,
+       "uncovered": 51.6875,
+       "model": 1158.6875,
+       "observed": 1026.0,
+       "iou": 0.804967468759682,
+       "dx": -2.5,
+       "dy": 4.5,
+       "model_bottom_y": 101.44740785601103,
+       "model_top_y": 68.38839918385324,
+       "model_toe_x": 167.17198792069834
+      }
+     },
+     "face +20": {
+      "app_pose": {
+       "xor": 294.1875,
+       "overhang": 272.625,
+       "uncovered": 21.5625,
+       "model": 1277.0625,
+       "observed": 1026.0,
+       "iou": 0.7734623159110597
+      },
+      "app_pose_visible": {
+       "xor": 294.1875,
+       "overhang": 272.625,
+       "uncovered": 21.5625,
+       "model": 1277.0625,
+       "observed": 1026.0,
+       "iou": 0.7734623159110597
+      },
+      "full": {
+       "xor": 259.5,
+       "overhang": 243.5625,
+       "uncovered": 15.9375,
+       "model": 1253.625,
+       "observed": 1026.0,
+       "iou": 0.7955988775660907,
+       "dx": -1.0,
+       "dy": 1.0,
+       "model_bottom_y": 97.9560528530352,
+       "model_top_y": 64.82454932695424,
+       "model_toe_x": 167.2733549797379
+      },
+      "visible": {
+       "xor": 254.8125,
+       "overhang": 192.5625,
+       "uncovered": 62.25,
+       "model": 1156.3125,
+       "observed": 1026.0,
+       "iou": 0.7908909062932759,
+       "dx": -0.5,
+       "dy": 5.0,
+       "model_bottom_y": 101.9560528530352,
+       "model_top_y": 68.82454932695424,
+       "model_toe_x": 167.7733549797379
+      }
+     },
+     "face +30": {
+      "app_pose": {
+       "xor": 318.0,
+       "overhang": 258.9375,
+       "uncovered": 59.0625,
+       "model": 1225.875,
+       "observed": 1026.0,
+       "iou": 0.7525171457755727
+      },
+      "app_pose_visible": {
+       "xor": 318.0,
+       "overhang": 258.9375,
+       "uncovered": 59.0625,
+       "model": 1225.875,
+       "observed": 1026.0,
+       "iou": 0.7525171457755727
+      },
+      "full": {
+       "xor": 276.5,
+       "overhang": 252.6875,
+       "uncovered": 23.8125,
+       "model": 1254.875,
+       "observed": 1026.0,
+       "iou": 0.783762647245711,
+       "dx": 1.25,
+       "dy": 0.75,
+       "model_bottom_y": 97.71517588831222,
+       "model_top_y": 64.52312961556268,
+       "model_toe_x": 167.53037141670862
+      },
+      "visible": {
+       "xor": 266.375,
+       "overhang": 190.125,
+       "uncovered": 76.25,
+       "model": 1139.875,
+       "observed": 1026.0,
+       "iou": 0.7809641278651455,
+       "dx": 2.5,
+       "dy": 5.75,
+       "model_bottom_y": 102.71517588831222,
+       "model_top_y": 69.52312961556268,
+       "model_toe_x": 168.78037141670862
+      }
+     },
+     "loft -10": {
+      "app_pose": {
+       "xor": 364.25,
+       "overhang": 362.9375,
+       "uncovered": 1.3125,
+       "model": 1387.625,
+       "observed": 1026.0,
+       "iou": 0.7377491787787428
+      },
+      "app_pose_visible": {
+       "xor": 364.25,
+       "overhang": 362.9375,
+       "uncovered": 1.3125,
+       "model": 1387.625,
+       "observed": 1026.0,
+       "iou": 0.7377491787787428
+      },
+      "full": {
+       "xor": 285.875,
+       "overhang": 275.875,
+       "uncovered": 10.0,
+       "model": 1291.875,
+       "observed": 1026.0,
+       "iou": 0.7804128660585694,
+       "dx": -4.0,
+       "dy": 1.75,
+       "model_bottom_y": 99.73680697816587,
+       "model_top_y": 64.48377701770693,
+       "model_toe_x": 166.4578764441161
+      },
+      "visible": {
+       "xor": 216.125,
+       "overhang": 182.1875,
+       "uncovered": 33.9375,
+       "model": 1174.25,
+       "observed": 1026.0,
+       "iou": 0.8211163416274377,
+       "dx": -3.75,
+       "dy": 4.5,
+       "model_bottom_y": 102.48680697816587,
+       "model_top_y": 67.23377701770693,
+       "model_toe_x": 166.7078764441161
+      }
+     },
+     "loft +10": {
+      "app_pose": {
+       "xor": 303.4375,
+       "overhang": 225.6875,
+       "uncovered": 77.75,
+       "model": 1173.9375,
+       "observed": 1026.0,
+       "iou": 0.7575772706845758
+      },
+      "app_pose_visible": {
+       "xor": 303.4375,
+       "overhang": 225.6875,
+       "uncovered": 77.75,
+       "model": 1173.9375,
+       "observed": 1026.0,
+       "iou": 0.7575772706845758
+      },
+      "full": {
+       "xor": 174.125,
+       "overhang": 131.0,
+       "uncovered": 43.125,
+       "model": 1113.875,
+       "observed": 1026.0,
+       "iou": 0.8495030250648228,
+       "dx": -3.0,
+       "dy": 2.0,
+       "model_bottom_y": 97.46326968962025,
+       "model_top_y": 67.76988801388374,
+       "model_toe_x": 167.44065382956623
+      },
+      "visible": {
+       "xor": 174.125,
+       "overhang": 131.0,
+       "uncovered": 43.125,
+       "model": 1113.875,
+       "observed": 1026.0,
+       "iou": 0.8495030250648228,
+       "dx": -3.0,
+       "dy": 2.0,
+       "model_bottom_y": 97.46326968962025,
+       "model_top_y": 67.76988801388374,
+       "model_toe_x": 167.44065382956623
+      }
+     },
+     "loft +20": {
+      "app_pose": {
+       "xor": 351.8125,
+       "overhang": 168.375,
+       "uncovered": 183.4375,
+       "model": 1010.9375,
+       "observed": 1026.0,
+       "iou": 0.7054421768707483
+      },
+      "app_pose_visible": {
+       "xor": 351.8125,
+       "overhang": 168.375,
+       "uncovered": 183.4375,
+       "model": 1010.9375,
+       "observed": 1026.0,
+       "iou": 0.7054421768707483
+      },
+      "full": {
+       "xor": 204.5625,
+       "overhang": 66.8125,
+       "uncovered": 137.75,
+       "model": 955.0625,
+       "observed": 1026.0,
+       "iou": 0.8128109808407206,
+       "dx": -3.25,
+       "dy": 3.5,
+       "model_bottom_y": 97.10473000689122,
+       "model_top_y": 71.60403878971752,
+       "model_toe_x": 167.18342486155612
+      },
+      "visible": {
+       "xor": 204.5625,
+       "overhang": 66.8125,
+       "uncovered": 137.75,
+       "model": 955.0625,
+       "observed": 1026.0,
+       "iou": 0.8128109808407206,
+       "dx": -3.25,
+       "dy": 3.5,
+       "model_bottom_y": 97.10473000689122,
+       "model_top_y": 71.60403878971752,
+       "model_toe_x": 167.18342486155612
+      }
+     },
+     "roll -6": {
+      "app_pose": {
+       "xor": 311.8125,
+       "overhang": 289.4375,
+       "uncovered": 22.375,
+       "model": 1293.0625,
+       "observed": 1026.0,
+       "iou": 0.7629590915569915
+      },
+      "app_pose_visible": {
+       "xor": 311.8125,
+       "overhang": 289.4375,
+       "uncovered": 22.375,
+       "model": 1293.0625,
+       "observed": 1026.0,
+       "iou": 0.7629590915569915
+      },
+      "full": {
+       "xor": 222.0625,
+       "overhang": 205.6875,
+       "uncovered": 16.375,
+       "model": 1215.3125,
+       "observed": 1026.0,
+       "iou": 0.8197087329375349,
+       "dx": -3.5,
+       "dy": 0.75,
+       "model_bottom_y": 98.7749842488881,
+       "model_top_y": 66.22020423941291,
+       "model_toe_x": 167.18671162586375
+      },
+      "visible": {
+       "xor": 220.0625,
+       "overhang": 202.4375,
+       "uncovered": 17.625,
+       "model": 1210.8125,
+       "observed": 1026.0,
+       "iou": 0.8208598321037904,
+       "dx": -3.5,
+       "dy": 1.0,
+       "model_bottom_y": 99.0249842488881,
+       "model_top_y": 66.47020423941291,
+       "model_toe_x": 167.18671162586375
+      }
+     },
+     "roll -3": {
+      "app_pose": {
+       "xor": 305.875,
+       "overhang": 288.0625,
+       "uncovered": 17.8125,
+       "model": 1296.25,
+       "observed": 1026.0,
+       "iou": 0.7672294887039239
+      },
+      "app_pose_visible": {
+       "xor": 305.875,
+       "overhang": 288.0625,
+       "uncovered": 17.8125,
+       "model": 1296.25,
+       "observed": 1026.0,
+       "iou": 0.7672294887039239
+      },
+      "full": {
+       "xor": 215.5625,
+       "overhang": 207.0,
+       "uncovered": 8.5625,
+       "model": 1224.4375,
+       "observed": 1026.0,
+       "iou": 0.8251723438767234,
+       "dx": -3.25,
+       "dy": 1.0,
+       "model_bottom_y": 98.44365173195197,
+       "model_top_y": 65.71159036791342,
+       "model_toe_x": 167.31065590082505
+      },
+      "visible": {
+       "xor": 215.5625,
+       "overhang": 207.0,
+       "uncovered": 8.5625,
+       "model": 1224.4375,
+       "observed": 1026.0,
+       "iou": 0.8251723438767234,
+       "dx": -3.25,
+       "dy": 1.0,
+       "model_bottom_y": 98.44365173195197,
+       "model_top_y": 65.71159036791342,
+       "model_toe_x": 167.31065590082505
+      }
+     },
+     "roll +3": {
+      "app_pose": {
+       "xor": 326.3125,
+       "overhang": 302.1875,
+       "uncovered": 24.125,
+       "model": 1304.0625,
+       "observed": 1026.0,
+       "iou": 0.7543174438849937
+      },
+      "app_pose_visible": {
+       "xor": 326.3125,
+       "overhang": 302.1875,
+       "uncovered": 24.125,
+       "model": 1304.0625,
+       "observed": 1026.0,
+       "iou": 0.7543174438849937
+      },
+      "full": {
+       "xor": 221.25,
+       "overhang": 216.1875,
+       "uncovered": 5.0625,
+       "model": 1237.125,
+       "observed": 1026.0,
+       "iou": 0.8218867924528301,
+       "dx": -3.0,
+       "dy": 2.0,
+       "model_bottom_y": 98.57094752554163,
+       "model_top_y": 65.22933356673374,
+       "model_toe_x": 167.35508312420802
+      },
+      "visible": {
+       "xor": 209.5,
+       "overhang": 178.5,
+       "uncovered": 31.0,
+       "model": 1173.5,
+       "observed": 1026.0,
+       "iou": 0.8260689082606891,
+       "dx": -3.5,
+       "dy": 3.75,
+       "model_bottom_y": 100.32094752554163,
+       "model_top_y": 66.97933356673374,
+       "model_toe_x": 166.85508312420802
+      }
+     },
+     "roll +6": {
+      "app_pose": {
+       "xor": 346.9375,
+       "overhang": 315.8125,
+       "uncovered": 31.125,
+       "model": 1310.6875,
+       "observed": 1026.0,
+       "iou": 0.7414411477013368
+      },
+      "app_pose_visible": {
+       "xor": 346.9375,
+       "overhang": 315.8125,
+       "uncovered": 31.125,
+       "model": 1310.6875,
+       "observed": 1026.0,
+       "iou": 0.7414411477013368
+      },
+      "full": {
+       "xor": 232.0,
+       "overhang": 224.75,
+       "uncovered": 7.25,
+       "model": 1243.5,
+       "observed": 1026.0,
+       "iou": 0.8145112932240656,
+       "dx": -3.0,
+       "dy": 2.5,
+       "model_bottom_y": 99.20589541237086,
+       "model_top_y": 65.01061398500323,
+       "model_toe_x": 167.27886151533124
+      },
+      "visible": {
+       "xor": 203.1875,
+       "overhang": 174.4375,
+       "uncovered": 28.75,
+       "model": 1171.6875,
+       "observed": 1026.0,
+       "iou": 0.8307387931483313,
+       "dx": -3.25,
+       "dy": 4.25,
+       "model_bottom_y": 100.95589541237086,
+       "model_top_y": 66.76061398500323,
+       "model_toe_x": 167.02886151533124
+      }
+     }
+    },
+    "depth_mm": 1565.202845212254
+   },
+   "IN-AIR f42 floor 5": {
+    "obs": {
+     "x_cut": 124.27987662208992,
+     "toe_x": 167.5,
+     "top_y": 64.5,
+     "bottom_y": 99.5
+    },
+    "line": [
+     81.9686648894956,
+     0.4374844787059557,
+     0.19855233198879774,
+     60
+    ],
+    "table": {
+     "supplied": {
+      "app_pose": {
+       "xor": 251.3125,
+       "overhang": 211.625,
+       "uncovered": 39.6875,
+       "model": 1299.9375,
+       "observed": 1128.0,
+       "iou": 0.8124008584491929
+      },
+      "app_pose_visible": {
+       "xor": 251.3125,
+       "overhang": 211.625,
+       "uncovered": 39.6875,
+       "model": 1299.9375,
+       "observed": 1128.0,
+       "iou": 0.8124008584491929
+      },
+      "full": {
+       "xor": 134.25,
+       "overhang": 122.6875,
+       "uncovered": 11.5625,
+       "model": 1239.125,
+       "observed": 1128.0,
+       "iou": 0.8926590375293588,
+       "dx": -2.75,
+       "dy": 1.75,
+       "model_bottom_y": 98.68949677087262,
+       "model_top_y": 65.71258661827184,
+       "model_toe_x": 167.6988879413647
+      },
+      "visible": {
+       "xor": 132.875,
+       "overhang": 119.5625,
+       "uncovered": 13.3125,
+       "model": 1234.25,
+       "observed": 1128.0,
+       "iou": 0.8934923100045088,
+       "dx": -2.75,
+       "dy": 2.0,
+       "model_bottom_y": 98.93949677087262,
+       "model_top_y": 65.96258661827184,
+       "model_toe_x": 167.6988879413647
+      }
+     }
+    },
+    "depth_mm": 1565.202845212254
+   },
+   "IN-AIR f42 floor 12": {
+    "obs": {
+     "x_cut": 126.0709118774812,
+     "toe_x": 166.5,
+     "top_y": 65.5,
+     "bottom_y": 98.5
+    },
+    "line": [
+     81.87457386492419,
+     0.44157616199487865,
+     0.3890154269253304,
+     64
+    ],
+    "table": {
+     "supplied": {
+      "app_pose": {
+       "xor": 412.9375,
+       "overhang": 406.5,
+       "uncovered": 6.4375,
+       "model": 1256.0625,
+       "observed": 856.0,
+       "iou": 0.672920792079208
+      },
+      "app_pose_visible": {
+       "xor": 412.9375,
+       "overhang": 406.5,
+       "uncovered": 6.4375,
+       "model": 1256.0625,
+       "observed": 856.0,
+       "iou": 0.672920792079208
+      },
+      "full": {
+       "xor": 314.8125,
+       "overhang": 310.8125,
+       "uncovered": 4.0,
+       "model": 1162.8125,
+       "observed": 856.0,
+       "iou": 0.7301944399807166,
+       "dx": -4.0,
+       "dy": 1.25,
+       "model_bottom_y": 98.18949677087262,
+       "model_top_y": 65.21258661827184,
+       "model_toe_x": 166.4488879413647
+      },
+      "visible": {
+       "xor": 220.125,
+       "overhang": 129.125,
+       "uncovered": 91.0,
+       "model": 894.125,
+       "observed": 856.0,
+       "iou": 0.7765511990864103,
+       "dx": -4.0,
+       "dy": 8.5,
+       "model_bottom_y": 105.43949677087262,
+       "model_top_y": 72.46258661827184,
+       "model_toe_x": 166.4488879413647
+      }
+     }
+    },
+    "depth_mm": 1565.202845212254
+   },
+   "NEAR f43 floor 8": {
+    "obs": {
+     "x_cut": 142.19633482832654,
+     "toe_x": 185.5,
+     "top_y": 79.5,
+     "bottom_y": 110.5
+    },
+    "line": [
+     92.72464452197467,
+     0.4528301073578321,
+     0.10274597018101932,
+     73
+    ],
+    "table": {
+     "supplied": {
+      "app_pose": {
+       "xor": 300.125,
+       "overhang": 207.75,
+       "uncovered": 92.375,
+       "model": 1089.375,
+       "observed": 974.0,
+       "iou": 0.7460334250052888
+      },
+      "app_pose_visible": {
+       "xor": 300.125,
+       "overhang": 207.75,
+       "uncovered": 92.375,
+       "model": 1089.375,
+       "observed": 974.0,
+       "iou": 0.7460334250052888
+      },
+      "full": {
+       "xor": 160.75,
+       "overhang": 150.8125,
+       "uncovered": 9.9375,
+       "model": 1114.875,
+       "observed": 974.0,
+       "iou": 0.8570872923264988,
+       "dx": 1.25,
+       "dy": 3.0,
+       "model_bottom_y": 110.01013932760578,
+       "model_top_y": 79.45093911306043,
+       "model_toe_x": 184.8248009328404
+      },
+      "visible": {
+       "xor": 138.9375,
+       "overhang": 106.5625,
+       "uncovered": 32.375,
+       "model": 1048.1875,
+       "observed": 974.0,
+       "iou": 0.8714211348256117,
+       "dx": 1.5,
+       "dy": 5.0,
+       "model_bottom_y": 112.01013932760578,
+       "model_top_y": 81.45093911306043,
+       "model_toe_x": 185.0748009328404
+      }
+     },
+     "size 0.85": {
+      "app_pose": {
+       "xor": 397.75,
+       "overhang": 125.0625,
+       "uncovered": 272.6875,
+       "model": 826.375,
+       "observed": 974.0,
+       "iou": 0.6381006539664487
+      },
+      "app_pose_visible": {
+       "xor": 397.75,
+       "overhang": 125.0625,
+       "uncovered": 272.6875,
+       "model": 826.375,
+       "observed": 974.0,
+       "iou": 0.6381006539664487
+      },
+      "full": {
+       "xor": 120.6875,
+       "overhang": 22.4375,
+       "uncovered": 98.25,
+       "model": 898.1875,
+       "observed": 974.0,
+       "iou": 0.8788810136109891,
+       "dx": 4.75,
+       "dy": 3.0,
+       "model_bottom_y": 108.01462360613607,
+       "model_top_y": 82.04787135354296,
+       "model_toe_x": 184.36673330624131
+      },
+      "visible": {
+       "xor": 120.6875,
+       "overhang": 22.4375,
+       "uncovered": 98.25,
+       "model": 898.1875,
+       "observed": 974.0,
+       "iou": 0.8788810136109891,
+       "dx": 4.75,
+       "dy": 3.0,
+       "model_bottom_y": 108.01462360613607,
+       "model_top_y": 82.04787135354296,
+       "model_toe_x": 184.36673330624131
+      }
+     },
+     "size 0.90": {
+      "app_pose": {
+       "xor": 359.375,
+       "overhang": 147.9375,
+       "uncovered": 211.4375,
+       "model": 910.5,
+       "observed": 974.0,
+       "iou": 0.6796835830872932
+      },
+      "app_pose_visible": {
+       "xor": 359.375,
+       "overhang": 147.9375,
+       "uncovered": 211.4375,
+       "model": 910.5,
+       "observed": 974.0,
+       "iou": 0.6796835830872932
+      },
+      "full": {
+       "xor": 110.25,
+       "overhang": 55.0625,
+       "uncovered": 55.1875,
+       "model": 973.875,
+       "observed": 974.0,
+       "iou": 0.892863650167021,
+       "dx": 3.75,
+       "dy": 3.25,
+       "model_bottom_y": 108.93022825971724,
+       "model_top_y": 81.4330048008161,
+       "model_toe_x": 184.68596414662773
+      },
+      "visible": {
+       "xor": 110.25,
+       "overhang": 55.0625,
+       "uncovered": 55.1875,
+       "model": 973.875,
+       "observed": 974.0,
+       "iou": 0.892863650167021,
+       "dx": 3.75,
+       "dy": 3.25,
+       "model_bottom_y": 108.93022825971724,
+       "model_top_y": 81.4330048008161,
+       "model_toe_x": 184.68596414662773
+      }
+     },
+     "size 0.95": {
+      "app_pose": {
+       "xor": 323.0625,
+       "overhang": 172.9375,
+       "uncovered": 150.125,
+       "model": 996.8125,
+       "observed": 974.0,
+       "iou": 0.7183259767860062
+      },
+      "app_pose_visible": {
+       "xor": 323.0625,
+       "overhang": 172.9375,
+       "uncovered": 150.125,
+       "model": 996.8125,
+       "observed": 974.0,
+       "iou": 0.7183259767860062
+      },
+      "full": {
+       "xor": 124.9375,
+       "overhang": 99.3125,
+       "uncovered": 25.625,
+       "model": 1047.6875,
+       "observed": 974.0,
+       "iou": 0.8835963430967216,
+       "dx": 2.75,
+       "dy": 3.0,
+       "model_bottom_y": 109.34540002615186,
+       "model_top_y": 80.31736107000238,
+       "model_toe_x": 185.0053200162357
+      },
+      "visible": {
+       "xor": 123.6875,
+       "overhang": 89.9375,
+       "uncovered": 33.75,
+       "model": 1030.1875,
+       "observed": 974.0,
+       "iou": 0.8837455207660224,
+       "dx": 2.5,
+       "dy": 4.0,
+       "model_bottom_y": 110.34540002615186,
+       "model_top_y": 81.31736107000238,
+       "model_toe_x": 184.7553200162357
+      }
+     },
+     "size 1.05": {
+      "app_pose": {
+       "xor": 309.6875,
+       "overhang": 260.875,
+       "uncovered": 48.8125,
+       "model": 1186.0625,
+       "observed": 974.0,
+       "iou": 0.7492155076424739
+      },
+      "app_pose_visible": {
+       "xor": 309.6875,
+       "overhang": 260.875,
+       "uncovered": 48.8125,
+       "model": 1186.0625,
+       "observed": 974.0,
+       "iou": 0.7492155076424739
+      },
+      "full": {
+       "xor": 213.1875,
+       "overhang": 207.0625,
+       "uncovered": 6.125,
+       "model": 1174.9375,
+       "observed": 974.0,
+       "iou": 0.8194951579615812,
+       "dx": -0.5,
+       "dy": 2.75,
+       "model_bottom_y": 110.42444658569609,
+       "model_top_y": 78.33373788006362,
+       "model_toe_x": 184.39440691422038
+      },
+      "visible": {
+       "xor": 152.125,
+       "overhang": 110.375,
+       "uncovered": 41.75,
+       "model": 1042.625,
+       "observed": 974.0,
+       "iou": 0.8597118155619596,
+       "dx": 0.25,
+       "dy": 6.25,
+       "model_bottom_y": 113.92444658569609,
+       "model_top_y": 81.83373788006362,
+       "model_toe_x": 185.14440691422038
+      }
+     },
+     "size 1.10": {
+      "app_pose": {
+       "xor": 367.875,
+       "overhang": 339.5625,
+       "uncovered": 28.3125,
+       "model": 1285.25,
+       "observed": 974.0,
+       "iou": 0.7199410001427415
+      },
+      "app_pose_visible": {
+       "xor": 367.875,
+       "overhang": 339.5625,
+       "uncovered": 28.3125,
+       "model": 1285.25,
+       "observed": 974.0,
+       "iou": 0.7199410001427415
+      },
+      "full": {
+       "xor": 273.75,
+       "overhang": 268.5625,
+       "uncovered": 5.1875,
+       "model": 1237.375,
+       "observed": 974.0,
+       "iou": 0.7796891504451486,
+       "dx": -2.0,
+       "dy": 2.25,
+       "model_bottom_y": 110.58832222149195,
+       "model_top_y": 76.96575631919585,
+       "model_toe_x": 184.21413797815765
+      },
+      "visible": {
+       "xor": 162.8125,
+       "overhang": 111.5625,
+       "uncovered": 51.25,
+       "model": 1034.3125,
+       "observed": 974.0,
+       "iou": 0.8500201508434567,
+       "dx": -1.0,
+       "dy": 7.5,
+       "model_bottom_y": 115.83832222149195,
+       "model_top_y": 82.21575631919585,
+       "model_toe_x": 185.21413797815765
+      }
+     },
+     "size 1.15": {
+      "app_pose": {
+       "xor": 437.6875,
+       "overhang": 425.5,
+       "uncovered": 12.1875,
+       "model": 1387.3125,
+       "observed": 974.0,
+       "iou": 0.6872543765630582
+      },
+      "app_pose_visible": {
+       "xor": 437.6875,
+       "overhang": 425.5,
+       "uncovered": 12.1875,
+       "model": 1387.3125,
+       "observed": 974.0,
+       "iou": 0.6872543765630582
+      },
+      "full": {
+       "xor": 337.8125,
+       "overhang": 333.875,
+       "uncovered": 3.9375,
+       "model": 1303.9375,
+       "observed": 974.0,
+       "iou": 0.7417088789066233,
+       "dx": -3.25,
+       "dy": 2.25,
+       "model_bottom_y": 111.25176665551558,
+       "model_top_y": 76.09699337674724,
+       "model_toe_x": 184.2839941424374
+      },
+      "visible": {
+       "xor": 171.75,
+       "overhang": 110.9375,
+       "uncovered": 60.8125,
+       "model": 1024.125,
+       "observed": 974.0,
+       "iou": 0.8416959502275476,
+       "dx": -2.25,
+       "dy": 8.75,
+       "model_bottom_y": 117.75176665551558,
+       "model_top_y": 82.59699337674724,
+       "model_toe_x": 185.2839941424374
+      }
+     },
+     "face -10": {
+      "app_pose": {
+       "xor": 300.4375,
+       "overhang": 224.0,
+       "uncovered": 76.4375,
+       "model": 1121.5625,
+       "observed": 974.0,
+       "iou": 0.7492174457429048
+      },
+      "app_pose_visible": {
+       "xor": 300.4375,
+       "overhang": 224.0,
+       "uncovered": 76.4375,
+       "model": 1121.5625,
+       "observed": 974.0,
+       "iou": 0.7492174457429048
+      },
+      "full": {
+       "xor": 157.5,
+       "overhang": 150.0,
+       "uncovered": 7.5,
+       "model": 1116.5,
+       "observed": 974.0,
+       "iou": 0.8598754448398577,
+       "dx": -0.25,
+       "dy": 3.0,
+       "model_bottom_y": 109.98896818183269,
+       "model_top_y": 79.49396848735991,
+       "model_toe_x": 183.40778116837663
+      },
+      "visible": {
+       "xor": 134.8125,
+       "overhang": 95.9375,
+       "uncovered": 38.875,
+       "model": 1031.0625,
+       "observed": 974.0,
+       "iou": 0.8739996495122379,
+       "dx": -0.5,
+       "dy": 5.25,
+       "model_bottom_y": 112.23896818183269,
+       "model_top_y": 81.74396848735991,
+       "model_toe_x": 183.15778116837663
+      }
+     },
+     "face +10": {
+      "app_pose": {
+       "xor": 330.9375,
+       "overhang": 222.8125,
+       "uncovered": 108.125,
+       "model": 1088.6875,
+       "observed": 974.0,
+       "iou": 0.7234842550524831
+      },
+      "app_pose_visible": {
+       "xor": 330.9375,
+       "overhang": 222.8125,
+       "uncovered": 108.125,
+       "model": 1088.6875,
+       "observed": 974.0,
+       "iou": 0.7234842550524831
+      },
+      "full": {
+       "xor": 194.375,
+       "overhang": 180.5625,
+       "uncovered": 13.8125,
+       "model": 1140.75,
+       "observed": 974.0,
+       "iou": 0.8316461863259893,
+       "dx": 2.5,
+       "dy": 2.75,
+       "model_bottom_y": 109.7842478240845,
+       "model_top_y": 79.16208419788236,
+       "model_toe_x": 185.39484541965157
+      },
+      "visible": {
+       "xor": 167.5625,
+       "overhang": 113.6875,
+       "uncovered": 53.875,
+       "model": 1033.8125,
+       "observed": 974.0,
+       "iou": 0.8459461012469115,
+       "dx": 2.75,
+       "dy": 6.0,
+       "model_bottom_y": 113.0342478240845,
+       "model_top_y": 82.41208419788236,
+       "model_toe_x": 185.64484541965157
+      }
+     },
+     "face +20": {
+      "app_pose": {
+       "xor": 386.5,
+       "overhang": 239.875,
+       "uncovered": 146.625,
+       "model": 1067.25,
+       "observed": 974.0,
+       "iou": 0.681598187622284
+      },
+      "app_pose_visible": {
+       "xor": 386.5,
+       "overhang": 239.875,
+       "uncovered": 146.625,
+       "model": 1067.25,
+       "observed": 974.0,
+       "iou": 0.681598187622284
+      },
+      "full": {
+       "xor": 224.4375,
+       "overhang": 203.625,
+       "uncovered": 20.8125,
+       "model": 1156.8125,
+       "observed": 974.0,
+       "iou": 0.80941513639741,
+       "dx": 4.25,
+       "dy": 2.5,
+       "model_bottom_y": 109.56138185498565,
+       "model_top_y": 78.87865456908298,
+       "model_toe_x": 185.88533585974426
+      },
+      "visible": {
+       "xor": 189.0625,
+       "overhang": 121.25,
+       "uncovered": 67.8125,
+       "model": 1027.4375,
+       "observed": 974.0,
+       "iou": 0.8273795937000685,
+       "dx": 4.5,
+       "dy": 6.5,
+       "model_bottom_y": 113.56138185498565,
+       "model_top_y": 82.87865456908298,
+       "model_toe_x": 186.13533585974426
+      }
+     },
+     "face +30": {
+      "app_pose": {
+       "xor": 458.0625,
+       "overhang": 253.25,
+       "uncovered": 204.8125,
+       "model": 1022.4375,
+       "observed": 974.0,
+       "iou": 0.6267569769810553
+      },
+      "app_pose_visible": {
+       "xor": 458.0625,
+       "overhang": 253.25,
+       "uncovered": 204.8125,
+       "model": 1022.4375,
+       "observed": 974.0,
+       "iou": 0.6267569769810553
+      },
+      "full": {
+       "xor": 250.8125,
+       "overhang": 221.4375,
+       "uncovered": 29.375,
+       "model": 1166.0625,
+       "observed": 974.0,
+       "iou": 0.7901918753594396,
+       "dx": 7.0,
+       "dy": 2.75,
+       "model_bottom_y": 109.84141991513499,
+       "model_top_y": 79.10174039599879,
+       "model_toe_x": 186.8190521531756
+      },
+      "visible": {
+       "xor": 202.0625,
+       "overhang": 140.375,
+       "uncovered": 61.6875,
+       "model": 1052.6875,
+       "observed": 974.0,
+       "iou": 0.818676388109927,
+       "dx": 7.5,
+       "dy": 6.25,
+       "model_bottom_y": 113.34141991513499,
+       "model_top_y": 82.60174039599879,
+       "model_toe_x": 187.3190521531756
+      }
+     },
+     "loft -10": {
+      "app_pose": {
+       "xor": 310.1875,
+       "overhang": 250.0,
+       "uncovered": 60.1875,
+       "model": 1163.8125,
+       "observed": 974.0,
+       "iou": 0.7465788398692811
+      },
+      "app_pose_visible": {
+       "xor": 310.1875,
+       "overhang": 250.0,
+       "uncovered": 60.1875,
+       "model": 1163.8125,
+       "observed": 974.0,
+       "iou": 0.7465788398692811
+      },
+      "full": {
+       "xor": 214.5,
+       "overhang": 210.3125,
+       "uncovered": 4.1875,
+       "model": 1180.125,
+       "observed": 974.0,
+       "iou": 0.8188822629162489,
+       "dx": 0.75,
+       "dy": 2.75,
+       "model_bottom_y": 110.76107005662925,
+       "model_top_y": 78.01731995097846,
+       "model_toe_x": 184.33597910076523
+      },
+      "visible": {
+       "xor": 136.5,
+       "overhang": 98.5625,
+       "uncovered": 37.9375,
+       "model": 1034.625,
+       "observed": 974.0,
+       "iou": 0.8727346891206806,
+       "dx": 1.25,
+       "dy": 6.25,
+       "model_bottom_y": 114.26107005662925,
+       "model_top_y": 81.51731995097846,
+       "model_toe_x": 184.83597910076523
+      }
+     },
+     "loft +10": {
+      "app_pose": {
+       "xor": 300.3125,
+       "overhang": 153.9375,
+       "uncovered": 146.375,
+       "model": 981.5625,
+       "observed": 974.0,
+       "iou": 0.7337507618994846
+      },
+      "app_pose_visible": {
+       "xor": 300.3125,
+       "overhang": 153.9375,
+       "uncovered": 146.375,
+       "model": 981.5625,
+       "observed": 974.0,
+       "iou": 0.7337507618994846
+      },
+      "full": {
+       "xor": 133.875,
+       "overhang": 82.1875,
+       "uncovered": 51.6875,
+       "model": 1004.5,
+       "observed": 974.0,
+       "iou": 0.8732469376886206,
+       "dx": 1.25,
+       "dy": 3.5,
+       "model_bottom_y": 109.11101536233456,
+       "model_top_y": 81.66972565870563,
+       "model_toe_x": 184.81844494247662
+      },
+      "visible": {
+       "xor": 133.875,
+       "overhang": 82.1875,
+       "uncovered": 51.6875,
+       "model": 1004.5,
+       "observed": 974.0,
+       "iou": 0.8732469376886206,
+       "dx": 1.25,
+       "dy": 3.5,
+       "model_bottom_y": 109.11101536233456,
+       "model_top_y": 81.66972565870563,
+       "model_toe_x": 184.81844494247662
+      }
+     },
+     "loft +20": {
+      "app_pose": {
+       "xor": 332.0625,
+       "overhang": 101.1875,
+       "uncovered": 230.875,
+       "model": 844.3125,
+       "observed": 974.0,
+       "iou": 0.6911585188629891
+      },
+      "app_pose_visible": {
+       "xor": 332.0625,
+       "overhang": 101.1875,
+       "uncovered": 230.875,
+       "model": 844.3125,
+       "observed": 974.0,
+       "iou": 0.6911585188629891
+      },
+      "full": {
+       "xor": 163.625,
+       "overhang": 22.9375,
+       "uncovered": 140.6875,
+       "model": 856.25,
+       "observed": 974.0,
+       "iou": 0.835872359099743,
+       "dx": 0.75,
+       "dy": 3.75,
+       "model_bottom_y": 107.60770214806429,
+       "model_top_y": 84.124224266752,
+       "model_toe_x": 184.3128649090883
+      },
+      "visible": {
+       "xor": 163.625,
+       "overhang": 22.9375,
+       "uncovered": 140.6875,
+       "model": 856.25,
+       "observed": 974.0,
+       "iou": 0.835872359099743,
+       "dx": 0.75,
+       "dy": 3.75,
+       "model_bottom_y": 107.60770214806429,
+       "model_top_y": 84.124224266752,
+       "model_toe_x": 184.3128649090883
+      }
+     },
+     "roll -6": {
+      "app_pose": {
+       "xor": 267.75,
+       "overhang": 190.4375,
+       "uncovered": 77.3125,
+       "model": 1087.125,
+       "observed": 974.0,
+       "iou": 0.7700606516021684
+      },
+      "app_pose_visible": {
+       "xor": 267.75,
+       "overhang": 190.4375,
+       "uncovered": 77.3125,
+       "model": 1087.125,
+       "observed": 974.0,
+       "iou": 0.7700606516021684
+      },
+      "full": {
+       "xor": 186.375,
+       "overhang": 157.375,
+       "uncovered": 29.0,
+       "model": 1102.375,
+       "observed": 974.0,
+       "iou": 0.8352668213457076,
+       "dx": 0.75,
+       "dy": 2.5,
+       "model_bottom_y": 110.51806925294649,
+       "model_top_y": 80.34663765538951,
+       "model_toe_x": 184.5475454601572
+      },
+      "visible": {
+       "xor": 160.25,
+       "overhang": 115.3125,
+       "uncovered": 44.9375,
+       "model": 1044.375,
+       "observed": 974.0,
+       "iou": 0.8528888633886051,
+       "dx": 0.75,
+       "dy": 4.25,
+       "model_bottom_y": 112.26806925294649,
+       "model_top_y": 82.09663765538951,
+       "model_toe_x": 184.5475454601572
+      }
+     },
+     "roll -3": {
+      "app_pose": {
+       "xor": 280.0,
+       "overhang": 196.6875,
+       "uncovered": 83.3125,
+       "model": 1087.375,
+       "observed": 974.0,
+       "iou": 0.7608243019593188
+      },
+      "app_pose_visible": {
+       "xor": 280.0,
+       "overhang": 196.6875,
+       "uncovered": 83.3125,
+       "model": 1087.375,
+       "observed": 974.0,
+       "iou": 0.7608243019593188
+      },
+      "full": {
+       "xor": 171.6875,
+       "overhang": 152.75,
+       "uncovered": 18.9375,
+       "model": 1107.8125,
+       "observed": 974.0,
+       "iou": 0.8476259152429554,
+       "dx": 1.0,
+       "dy": 2.5,
+       "model_bottom_y": 109.97841518159089,
+       "model_top_y": 79.6443284085841,
+       "model_toe_x": 184.67950013153356
+      },
+      "visible": {
+       "xor": 149.0625,
+       "overhang": 113.75,
+       "uncovered": 35.3125,
+       "model": 1052.4375,
+       "observed": 974.0,
+       "iou": 0.8629625373477362,
+       "dx": 0.75,
+       "dy": 4.25,
+       "model_bottom_y": 111.72841518159089,
+       "model_top_y": 81.3943284085841,
+       "model_toe_x": 184.42950013153356
+      }
+     },
+     "roll +3": {
+      "app_pose": {
+       "xor": 315.875,
+       "overhang": 217.8125,
+       "uncovered": 98.0625,
+       "model": 1093.75,
+       "observed": 974.0,
+       "iou": 0.7349625045885994
+      },
+      "app_pose_visible": {
+       "xor": 315.875,
+       "overhang": 217.8125,
+       "uncovered": 98.0625,
+       "model": 1093.75,
+       "observed": 974.0,
+       "iou": 0.7349625045885994
+      },
+      "full": {
+       "xor": 160.8125,
+       "overhang": 155.5,
+       "uncovered": 5.3125,
+       "model": 1124.1875,
+       "observed": 974.0,
+       "iou": 0.8576250553342187,
+       "dx": 1.5,
+       "dy": 3.25,
+       "model_bottom_y": 109.91719910768248,
+       "model_top_y": 79.02188007121411,
+       "model_toe_x": 184.98671605070967
+      },
+      "visible": {
+       "xor": 131.125,
+       "overhang": 96.9375,
+       "uncovered": 34.1875,
+       "model": 1036.75,
+       "observed": 974.0,
+       "iou": 0.8775605485847681,
+       "dx": 1.5,
+       "dy": 5.5,
+       "model_bottom_y": 112.16719910768248,
+       "model_top_y": 81.27188007121411,
+       "model_toe_x": 184.98671605070967
+      }
+     },
+     "roll +6": {
+      "app_pose": {
+       "xor": 334.625,
+       "overhang": 227.9375,
+       "uncovered": 106.6875,
+       "model": 1095.25,
+       "observed": 974.0,
+       "iou": 0.7215953408559097
+      },
+      "app_pose_visible": {
+       "xor": 334.625,
+       "overhang": 227.9375,
+       "uncovered": 106.6875,
+       "model": 1095.25,
+       "observed": 974.0,
+       "iou": 0.7215953408559097
+      },
+      "full": {
+       "xor": 167.3125,
+       "overhang": 159.6875,
+       "uncovered": 7.625,
+       "model": 1126.0625,
+       "observed": 974.0,
+       "iou": 0.8524174430784498,
+       "dx": 1.5,
+       "dy": 3.5,
+       "model_bottom_y": 110.28911007005429,
+       "model_top_y": 78.60656341897523,
+       "model_toe_x": 184.91650127596557
+      },
+      "visible": {
+       "xor": 124.8125,
+       "overhang": 101.1875,
+       "uncovered": 23.625,
+       "model": 1051.5625,
+       "observed": 974.0,
+       "iou": 0.8839155961169564,
+       "dx": 2.0,
+       "dy": 5.5,
+       "model_bottom_y": 112.28911007005429,
+       "model_top_y": 80.60656341897523,
+       "model_toe_x": 185.41650127596557
+      }
+     }
+    },
+    "depth_mm": 1679.2986548778679
+   },
+   "NEAR f43 floor 5": {
+    "obs": {
+     "x_cut": 142.19633482832654,
+     "toe_x": 186.5,
+     "top_y": 79.5,
+     "bottom_y": 111.5
+    },
+    "line": [
+     92.72464452197467,
+     0.4528301073578321,
+     0.10274597018101932,
+     73
+    ],
+    "table": {
+     "supplied": {
+      "app_pose": {
+       "xor": 332.125,
+       "overhang": 186.25,
+       "uncovered": 145.875,
+       "model": 1089.375,
+       "observed": 1049.0,
+       "iou": 0.7311273021655535
+      },
+      "app_pose_visible": {
+       "xor": 332.125,
+       "overhang": 186.25,
+       "uncovered": 145.875,
+       "model": 1089.375,
+       "observed": 1049.0,
+       "iou": 0.7311273021655535
+      },
+      "full": {
+       "xor": 109.75,
+       "overhang": 92.8125,
+       "uncovered": 16.9375,
+       "model": 1124.875,
+       "observed": 1049.0,
+       "iou": 0.9038808911270458,
+       "dx": 1.75,
+       "dy": 3.25,
+       "model_bottom_y": 110.26013932760578,
+       "model_top_y": 79.70093911306043,
+       "model_toe_x": 185.3248009328404
+      },
+      "visible": {
+       "xor": 109.75,
+       "overhang": 92.8125,
+       "uncovered": 16.9375,
+       "model": 1124.875,
+       "observed": 1049.0,
+       "iou": 0.9038808911270458,
+       "dx": 1.75,
+       "dy": 3.25,
+       "model_bottom_y": 110.26013932760578,
+       "model_top_y": 79.70093911306043,
+       "model_toe_x": 185.3248009328404
+      }
+     }
+    },
+    "depth_mm": 1679.2986548778679
+   },
+   "NEAR f43 floor 12": {
+    "obs": {
+     "x_cut": 141.96991977464762,
+     "toe_x": 184.5,
+     "top_y": 80.5,
+     "bottom_y": 109.5
+    },
+    "line": [
+     92.72464452197467,
+     0.4528301073578321,
+     0.10274597018101932,
+     73
+    ],
+    "table": {
+     "supplied": {
+      "app_pose": {
+       "xor": 297.25,
+       "overhang": 248.5625,
+       "uncovered": 48.6875,
+       "model": 1109.875,
+       "observed": 910.0,
+       "iou": 0.7434320548093003
+      },
+      "app_pose_visible": {
+       "xor": 297.25,
+       "overhang": 248.5625,
+       "uncovered": 48.6875,
+       "model": 1109.875,
+       "observed": 910.0,
+       "iou": 0.7434320548093003
+      },
+      "full": {
+       "xor": 228.0625,
+       "overhang": 223.9375,
+       "uncovered": 4.125,
+       "model": 1129.8125,
+       "observed": 910.0,
+       "iou": 0.7988755994047291,
+       "dx": 1.0,
+       "dy": 2.5,
+       "model_bottom_y": 109.51013932760578,
+       "model_top_y": 78.95093911306043,
+       "model_toe_x": 184.5748009328404
+      },
+      "visible": {
+       "xor": 153.4375,
+       "overhang": 120.5625,
+       "uncovered": 32.875,
+       "model": 997.6875,
+       "observed": 910.0,
+       "iou": 0.8511128631208684,
+       "dx": 1.5,
+       "dy": 5.75,
+       "model_bottom_y": 112.76013932760578,
+       "model_top_y": 82.20093911306043,
+       "model_toe_x": 185.0748009328404
+      }
+     }
+    },
+    "depth_mm": 1679.2986548778679
+   }
+  },
+  "3": {
+   "IN-AIR f42 floor 8": {
+    "obs": {
+     "x_cut": 125.95157387776513,
+     "toe_x": 159.5,
+     "top_y": 62.5,
+     "bottom_y": 90.5
+    },
+    "line": [
+     82.20920616543442,
+     0.4869982930623316,
+     0.1645840544002215,
+     57
+    ],
+    "table": {
+     "supplied": {
+      "app_pose": {
+       "xor": 284.5,
+       "overhang": 163.0,
+       "uncovered": 121.5,
+       "model": 752.5,
+       "observed": 711.0,
+       "iou": 0.6744851258581236
+      },
+      "app_pose_visible": {
+       "xor": 170.4375,
+       "overhang": 48.9375,
+       "uncovered": 121.5,
+       "model": 638.4375,
+       "observed": 711.0,
+       "iou": 0.7757216876387861
+      },
+      "full": {
+       "xor": 81.5625,
+       "overhang": 70.5,
+       "uncovered": 11.0625,
+       "model": 770.4375,
+       "observed": 711.0,
+       "iou": 0.8956333973128598,
+       "dx": 1.0,
+       "dy": -4.5,
+       "model_bottom_y": 89.39924951354553,
+       "model_top_y": 62.72569317304966,
+       "model_toe_x": 159.02086331209654
+      },
+      "visible": {
+       "xor": 79.5,
+       "overhang": 62.4375,
+       "uncovered": 17.0625,
+       "model": 756.375,
+       "observed": 711.0,
+       "iou": 0.8972121212121212,
+       "dx": 0.75,
+       "dy": -3.75,
+       "model_bottom_y": 90.14924951354553,
+       "model_top_y": 63.47569317304966,
+       "model_toe_x": 158.77086331209654
+      }
+     },
+     "size 0.85": {
+      "app_pose": {
+       "xor": 330.3125,
+       "overhang": 93.5,
+       "uncovered": 236.8125,
+       "model": 567.6875,
+       "observed": 711.0,
+       "iou": 0.5894188937228092
+      },
+      "app_pose_visible": {
+       "xor": 272.9375,
+       "overhang": 36.125,
+       "uncovered": 236.8125,
+       "model": 510.3125,
+       "observed": 711.0,
+       "iou": 0.6346829513133679
+      },
+      "full": {
+       "xor": 101.25,
+       "overhang": 4.1875,
+       "uncovered": 97.0625,
+       "model": 618.125,
+       "observed": 711.0,
+       "iou": 0.8584287337236739,
+       "dx": 3.75,
+       "dy": -4.5,
+       "model_bottom_y": 87.7375896772667,
+       "model_top_y": 65.07247515129679,
+       "model_toe_x": 158.51628247432564
+      },
+      "visible": {
+       "xor": 101.25,
+       "overhang": 4.1875,
+       "uncovered": 97.0625,
+       "model": 618.125,
+       "observed": 711.0,
+       "iou": 0.8584287337236739,
+       "dx": 3.75,
+       "dy": -4.5,
+       "model_bottom_y": 87.7375896772667,
+       "model_top_y": 65.07247515129679,
+       "model_toe_x": 158.51628247432564
+      }
+     },
+     "size 0.90": {
+      "app_pose": {
+       "xor": 309.6875,
+       "overhang": 111.8125,
+       "uncovered": 197.875,
+       "model": 624.9375,
+       "observed": 711.0,
+       "iou": 0.6236232434485378
+      },
+      "app_pose_visible": {
+       "xor": 235.75,
+       "overhang": 37.875,
+       "uncovered": 197.875,
+       "model": 551.0,
+       "observed": 711.0,
+       "iou": 0.685194458354198
+      },
+      "full": {
+       "xor": 69.8125,
+       "overhang": 15.75,
+       "uncovered": 54.0625,
+       "model": 672.6875,
+       "observed": 711.0,
+       "iou": 0.9039387684898521,
+       "dx": 3.25,
+       "dy": -5.0,
+       "model_bottom_y": 87.79173675724354,
+       "model_top_y": 63.79077012021477,
+       "model_toe_x": 159.1008936502353
+      },
+      "visible": {
+       "xor": 69.8125,
+       "overhang": 15.75,
+       "uncovered": 54.0625,
+       "model": 672.6875,
+       "observed": 711.0,
+       "iou": 0.9039387684898521,
+       "dx": 3.25,
+       "dy": -5.0,
+       "model_bottom_y": 87.79173675724354,
+       "model_top_y": 63.79077012021477,
+       "model_toe_x": 159.1008936502353
+      }
+     },
+     "size 0.95": {
+      "app_pose": {
+       "xor": 295.9375,
+       "overhang": 137.25,
+       "uncovered": 158.6875,
+       "model": 689.5625,
+       "observed": 711.0,
+       "iou": 0.6511199528440907
+      },
+      "app_pose_visible": {
+       "xor": 201.0,
+       "overhang": 42.3125,
+       "uncovered": 158.6875,
+       "model": 594.625,
+       "observed": 711.0,
+       "iou": 0.7331784617937442
+      },
+      "full": {
+       "xor": 62.1875,
+       "overhang": 36.9375,
+       "uncovered": 25.25,
+       "model": 722.6875,
+       "observed": 711.0,
+       "iou": 0.9168546837135456,
+       "dx": 2.0,
+       "dy": -4.5,
+       "model_bottom_y": 88.84562330810775,
+       "model_top_y": 63.508509658196516,
+       "model_toe_x": 158.93575390088972
+      },
+      "visible": {
+       "xor": 62.1875,
+       "overhang": 36.9375,
+       "uncovered": 25.25,
+       "model": 722.6875,
+       "observed": 711.0,
+       "iou": 0.9168546837135456,
+       "dx": 2.0,
+       "dy": -4.5,
+       "model_bottom_y": 88.84562330810775,
+       "model_top_y": 63.508509658196516,
+       "model_toe_x": 158.93575390088972
+      }
+     },
+     "size 1.05": {
+      "app_pose": {
+       "xor": 288.25,
+       "overhang": 198.0625,
+       "uncovered": 90.1875,
+       "model": 818.875,
+       "observed": 711.0,
+       "iou": 0.6829150910965968
+      },
+      "app_pose_visible": {
+       "xor": 152.75,
+       "overhang": 62.5625,
+       "uncovered": 90.1875,
+       "model": 683.375,
+       "observed": 711.0,
+       "iou": 0.8025369637230346
+      },
+      "full": {
+       "xor": 114.375,
+       "overhang": 108.6875,
+       "uncovered": 5.6875,
+       "model": 814.0,
+       "observed": 711.0,
+       "iou": 0.8604651162790697,
+       "dx": -0.25,
+       "dy": -4.5,
+       "model_bottom_y": 89.95261555707053,
+       "model_top_y": 61.9423200717397,
+       "model_toe_x": 158.85622196970297
+      },
+      "visible": {
+       "xor": 91.5625,
+       "overhang": 72.0,
+       "uncovered": 19.5625,
+       "model": 763.4375,
+       "observed": 711.0,
+       "iou": 0.8830619412515964,
+       "dx": -0.25,
+       "dy": -2.75,
+       "model_bottom_y": 91.70261555707053,
+       "model_top_y": 63.6923200717397,
+       "model_toe_x": 158.85622196970297
+      }
+     },
+     "size 1.10": {
+      "app_pose": {
+       "xor": 301.25,
+       "overhang": 239.0,
+       "uncovered": 62.25,
+       "model": 887.75,
+       "observed": 711.0,
+       "iou": 0.6828947368421052
+      },
+      "app_pose_visible": {
+       "xor": 142.5625,
+       "overhang": 80.3125,
+       "uncovered": 62.25,
+       "model": 729.0625,
+       "observed": 711.0,
+       "iou": 0.8198404549403681
+      },
+      "full": {
+       "xor": 153.5,
+       "overhang": 149.375,
+       "uncovered": 4.125,
+       "model": 856.25,
+       "observed": 711.0,
+       "iou": 0.8215894232166207,
+       "dx": -1.5,
+       "dy": -4.5,
+       "model_bottom_y": 90.50572162202393,
+       "model_top_y": 61.158389760388474,
+       "model_toe_x": 158.69182995959557
+      },
+      "visible": {
+       "xor": 100.3125,
+       "overhang": 77.0,
+       "uncovered": 23.3125,
+       "model": 764.6875,
+       "observed": 711.0,
+       "iou": 0.8726998730964467,
+       "dx": -1.25,
+       "dy": -1.75,
+       "model_bottom_y": 93.25572162202393,
+       "model_top_y": 63.908389760388474,
+       "model_toe_x": 158.94182995959557
+      }
+     },
+     "size 1.15": {
+      "app_pose": {
+       "xor": 331.5625,
+       "overhang": 290.4375,
+       "uncovered": 41.125,
+       "model": 960.3125,
+       "observed": 711.0,
+       "iou": 0.6689134369344067
+      },
+      "app_pose_visible": {
+       "xor": 150.0625,
+       "overhang": 108.9375,
+       "uncovered": 41.125,
+       "model": 778.8125,
+       "observed": 711.0,
+       "iou": 0.8169830017531824
+      },
+      "full": {
+       "xor": 194.6875,
+       "overhang": 191.3125,
+       "uncovered": 3.375,
+       "model": 898.9375,
+       "observed": 711.0,
+       "iou": 0.7842349518598046,
+       "dx": -2.75,
+       "dy": -4.5,
+       "model_bottom_y": 91.05856789157465,
+       "model_top_y": 60.37390164427268,
+       "model_toe_x": 158.52768736770042
+      },
+      "visible": {
+       "xor": 108.1875,
+       "overhang": 79.9375,
+       "uncovered": 28.25,
+       "model": 762.6875,
+       "observed": 711.0,
+       "iou": 0.8632161201106282,
+       "dx": -2.0,
+       "dy": -0.5,
+       "model_bottom_y": 95.05856789157465,
+       "model_top_y": 64.37390164427268,
+       "model_toe_x": 159.27768736770042
+      }
+     },
+     "face -10": {
+      "app_pose": {
+       "xor": 288.9375,
+       "overhang": 180.375,
+       "uncovered": 108.5625,
+       "model": 782.8125,
+       "observed": 711.0,
+       "iou": 0.6758519141775348
+      },
+      "app_pose_visible": {
+       "xor": 172.375,
+       "overhang": 63.8125,
+       "uncovered": 108.5625,
+       "model": 666.25,
+       "observed": 711.0,
+       "iou": 0.7775268210050819
+      },
+      "full": {
+       "xor": 89.1875,
+       "overhang": 75.9375,
+       "uncovered": 13.25,
+       "model": 773.6875,
+       "observed": 711.0,
+       "iou": 0.8866650782304821,
+       "dx": -0.5,
+       "dy": -4.25,
+       "model_bottom_y": 89.66145122950441,
+       "model_top_y": 63.000192568375496,
+       "model_toe_x": 157.23087322213829
+      },
+      "visible": {
+       "xor": 79.625,
+       "overhang": 60.75,
+       "uncovered": 18.875,
+       "model": 752.875,
+       "observed": 711.0,
+       "iou": 0.8968253968253969,
+       "dx": -0.5,
+       "dy": -3.25,
+       "model_bottom_y": 90.66145122950441,
+       "model_top_y": 64.0001925683755,
+       "model_toe_x": 157.23087322213829
+      }
+     },
+     "face +10": {
+      "app_pose": {
+       "xor": 279.875,
+       "overhang": 157.125,
+       "uncovered": 122.75,
+       "model": 745.375,
+       "observed": 711.0,
+       "iou": 0.6776097912167026
+      },
+      "app_pose_visible": {
+       "xor": 169.375,
+       "overhang": 46.625,
+       "uncovered": 122.75,
+       "model": 634.875,
+       "observed": 711.0,
+       "iou": 0.7764395314304571
+      },
+      "full": {
+       "xor": 90.625,
+       "overhang": 78.4375,
+       "uncovered": 12.1875,
+       "model": 777.25,
+       "observed": 711.0,
+       "iou": 0.8852030718074578,
+       "dx": 1.75,
+       "dy": -4.5,
+       "model_bottom_y": 89.39198424230156,
+       "model_top_y": 62.7037565265216,
+       "model_toe_x": 159.5127010747181
+      },
+      "visible": {
+       "xor": 87.25,
+       "overhang": 66.9375,
+       "uncovered": 20.3125,
+       "model": 757.625,
+       "observed": 711.0,
+       "iou": 0.8878444605125733,
+       "dx": 1.5,
+       "dy": -3.5,
+       "model_bottom_y": 90.39198424230156,
+       "model_top_y": 63.7037565265216,
+       "model_toe_x": 159.2627010747181
+      }
+     },
+     "face +20": {
+      "app_pose": {
+       "xor": 281.0625,
+       "overhang": 154.0625,
+       "uncovered": 127.0,
+       "model": 738.0625,
+       "observed": 711.0,
+       "iou": 0.6750957300773065
+      },
+      "app_pose_visible": {
+       "xor": 172.4375,
+       "overhang": 45.4375,
+       "uncovered": 127.0,
+       "model": 629.4375,
+       "observed": 711.0,
+       "iou": 0.7720399900851028
+      },
+      "full": {
+       "xor": 106.0625,
+       "overhang": 92.1875,
+       "uncovered": 13.875,
+       "model": 789.3125,
+       "observed": 711.0,
+       "iou": 0.867948019609369,
+       "dx": 2.75,
+       "dy": -4.75,
+       "model_bottom_y": 89.13769373602906,
+       "model_top_y": 62.43508044306692,
+       "model_toe_x": 159.70754862021408
+      },
+      "visible": {
+       "xor": 103.9375,
+       "overhang": 83.625,
+       "uncovered": 20.3125,
+       "model": 774.3125,
+       "observed": 711.0,
+       "iou": 0.8691993078496146,
+       "dx": 2.75,
+       "dy": -3.5,
+       "model_bottom_y": 90.38769373602906,
+       "model_top_y": 63.68508044306692,
+       "model_toe_x": 159.70754862021408
+      }
+     },
+     "face +30": {
+      "app_pose": {
+       "xor": 306.9375,
+       "overhang": 154.9375,
+       "uncovered": 152.0,
+       "model": 713.9375,
+       "observed": 711.0,
+       "iou": 0.6455431252255504
+      },
+      "app_pose_visible": {
+       "xor": 201.125,
+       "overhang": 49.125,
+       "uncovered": 152.0,
+       "model": 608.125,
+       "observed": 711.0,
+       "iou": 0.7354053609603683
+      },
+      "full": {
+       "xor": 115.6875,
+       "overhang": 101.875,
+       "uncovered": 13.8125,
+       "model": 799.0625,
+       "observed": 711.0,
+       "iou": 0.8576810702752575,
+       "dx": 4.5,
+       "dy": -4.75,
+       "model_bottom_y": 89.13707140623045,
+       "model_top_y": 62.42026472453202,
+       "model_toe_x": 160.10962836451023
+      },
+      "visible": {
+       "xor": 115.6875,
+       "overhang": 101.875,
+       "uncovered": 13.8125,
+       "model": 799.0625,
+       "observed": 711.0,
+       "iou": 0.8576810702752575,
+       "dx": 4.5,
+       "dy": -4.75,
+       "model_bottom_y": 89.13707140623045,
+       "model_top_y": 62.42026472453202,
+       "model_toe_x": 160.10962836451023
+      }
+     },
+     "loft -10": {
+      "app_pose": {
+       "xor": 285.125,
+       "overhang": 183.5,
+       "uncovered": 101.625,
+       "model": 792.875,
+       "observed": 711.0,
+       "iou": 0.6812465064281722
+      },
+      "app_pose_visible": {
+       "xor": 151.375,
+       "overhang": 49.75,
+       "uncovered": 101.625,
+       "model": 659.125,
+       "observed": 711.0,
+       "iou": 0.8010187315149524
+      },
+      "full": {
+       "xor": 106.125,
+       "overhang": 103.4375,
+       "uncovered": 2.6875,
+       "model": 811.75,
+       "observed": 711.0,
+       "iou": 0.8696953418770624,
+       "dx": 1.0,
+       "dy": -4.5,
+       "model_bottom_y": 90.02412647869623,
+       "model_top_y": 61.93019576162348,
+       "model_toe_x": 159.01438577183683
+      },
+      "visible": {
+       "xor": 87.0625,
+       "overhang": 66.4375,
+       "uncovered": 20.625,
+       "model": 756.8125,
+       "observed": 711.0,
+       "iou": 0.8880135059088351,
+       "dx": 0.5,
+       "dy": -3.0,
+       "model_bottom_y": 91.52412647869623,
+       "model_top_y": 63.43019576162348,
+       "model_toe_x": 158.51438577183683
+      }
+     },
+     "loft +10": {
+      "app_pose": {
+       "xor": 285.8125,
+       "overhang": 133.125,
+       "uncovered": 152.6875,
+       "model": 691.4375,
+       "observed": 711.0,
+       "iou": 0.6614097438175626
+      },
+      "app_pose_visible": {
+       "xor": 200.375,
+       "overhang": 47.6875,
+       "uncovered": 152.6875,
+       "model": 606.0,
+       "observed": 711.0,
+       "iou": 0.7358925776423099
+      },
+      "full": {
+       "xor": 63.6875,
+       "overhang": 30.375,
+       "uncovered": 33.3125,
+       "model": 708.0625,
+       "observed": 711.0,
+       "iou": 0.9140954307873883,
+       "dx": 1.0,
+       "dy": -4.25,
+       "model_bottom_y": 88.69090899447862,
+       "model_top_y": 64.25224369873783,
+       "model_toe_x": 159.02691044455008
+      },
+      "visible": {
+       "xor": 63.6875,
+       "overhang": 30.375,
+       "uncovered": 33.3125,
+       "model": 708.0625,
+       "observed": 711.0,
+       "iou": 0.9140954307873883,
+       "dx": 1.0,
+       "dy": -4.25,
+       "model_bottom_y": 88.69090899447862,
+       "model_top_y": 64.25224369873783,
+       "model_toe_x": 159.02691044455008
+      }
+     },
+     "loft +20": {
+      "app_pose": {
+       "xor": 290.875,
+       "overhang": 95.0625,
+       "uncovered": 195.8125,
+       "model": 610.25,
+       "observed": 711.0,
+       "iou": 0.6391408854772428
+      },
+      "app_pose_visible": {
+       "xor": 241.4375,
+       "overhang": 45.625,
+       "uncovered": 195.8125,
+       "model": 560.8125,
+       "observed": 711.0,
+       "iou": 0.680902032050223
+      },
+      "full": {
+       "xor": 99.0,
+       "overhang": 6.4375,
+       "uncovered": 92.5625,
+       "model": 624.875,
+       "observed": 711.0,
+       "iou": 0.8620088857914453,
+       "dx": 1.0,
+       "dy": -4.0,
+       "model_bottom_y": 87.67952128951661,
+       "model_top_y": 66.22378397860246,
+       "model_toe_x": 159.03234282321603
+      },
+      "visible": {
+       "xor": 99.0,
+       "overhang": 6.4375,
+       "uncovered": 92.5625,
+       "model": 624.875,
+       "observed": 711.0,
+       "iou": 0.8620088857914453,
+       "dx": 1.0,
+       "dy": -4.0,
+       "model_bottom_y": 87.67952128951661,
+       "model_top_y": 66.22378397860246,
+       "model_toe_x": 159.03234282321603
+      }
+     },
+     "roll -6": {
+      "app_pose": {
+       "xor": 312.125,
+       "overhang": 174.5625,
+       "uncovered": 137.5625,
+       "model": 748.0,
+       "observed": 711.0,
+       "iou": 0.6475404051097466
+      },
+      "app_pose_visible": {
+       "xor": 188.5625,
+       "overhang": 51.0,
+       "uncovered": 137.5625,
+       "model": 624.4375,
+       "observed": 711.0,
+       "iou": 0.7525426509186351
+      },
+      "full": {
+       "xor": 82.3125,
+       "overhang": 66.375,
+       "uncovered": 15.9375,
+       "model": 761.4375,
+       "observed": 711.0,
+       "iou": 0.8941148094548963,
+       "dx": 0.75,
+       "dy": -4.75,
+       "model_bottom_y": 89.55170142170145,
+       "model_top_y": 63.62478206742534,
+       "model_toe_x": 158.93332670901884
+      },
+      "visible": {
+       "xor": 82.25,
+       "overhang": 65.625,
+       "uncovered": 16.625,
+       "model": 760.0,
+       "observed": 711.0,
+       "iou": 0.8940930307419926,
+       "dx": 0.75,
+       "dy": -4.5,
+       "model_bottom_y": 89.80170142170145,
+       "model_top_y": 63.87478206742534,
+       "model_toe_x": 158.93332670901884
+      }
+     },
+     "roll -3": {
+      "app_pose": {
+       "xor": 297.1875,
+       "overhang": 168.125,
+       "uncovered": 129.0625,
+       "model": 750.0625,
+       "observed": 711.0,
+       "iou": 0.6619508033556093
+      },
+      "app_pose_visible": {
+       "xor": 179.1875,
+       "overhang": 50.125,
+       "uncovered": 129.0625,
+       "model": 632.0625,
+       "observed": 711.0,
+       "iou": 0.7645754639513878
+      },
+      "full": {
+       "xor": 77.75,
+       "overhang": 65.1875,
+       "uncovered": 12.5625,
+       "model": 763.625,
+       "observed": 711.0,
+       "iou": 0.8998309042596022,
+       "dx": 0.75,
+       "dy": -4.75,
+       "model_bottom_y": 89.21396705873688,
+       "model_top_y": 63.040450623401355,
+       "model_toe_x": 158.84382606583304
+      },
+      "visible": {
+       "xor": 77.75,
+       "overhang": 65.1875,
+       "uncovered": 12.5625,
+       "model": 763.625,
+       "observed": 711.0,
+       "iou": 0.8998309042596022,
+       "dx": 0.75,
+       "dy": -4.75,
+       "model_bottom_y": 89.21396705873688,
+       "model_top_y": 63.040450623401355,
+       "model_toe_x": 158.84382606583304
+      }
+     },
+     "roll +3": {
+      "app_pose": {
+       "xor": 272.875,
+       "overhang": 158.6875,
+       "uncovered": 114.1875,
+       "model": 755.5,
+       "observed": 711.0,
+       "iou": 0.6862378727991376
+      },
+      "app_pose_visible": {
+       "xor": 162.4375,
+       "overhang": 48.25,
+       "uncovered": 114.1875,
+       "model": 645.0625,
+       "observed": 711.0,
+       "iou": 0.7860553177477774
+      },
+      "full": {
+       "xor": 89.75,
+       "overhang": 76.1875,
+       "uncovered": 13.5625,
+       "model": 773.625,
+       "observed": 711.0,
+       "iou": 0.885986502580389,
+       "dx": 1.0,
+       "dy": -4.25,
+       "model_bottom_y": 90.0273606679871,
+       "model_top_y": 62.43737108171891,
+       "model_toe_x": 158.96329819867367
+      },
+      "visible": {
+       "xor": 82.125,
+       "overhang": 63.8125,
+       "uncovered": 18.3125,
+       "model": 756.5,
+       "observed": 711.0,
+       "iou": 0.8940066145035089,
+       "dx": 1.0,
+       "dy": -3.5,
+       "model_bottom_y": 90.7773606679871,
+       "model_top_y": 63.18737108171891,
+       "model_toe_x": 158.96329819867367
+      }
+     },
+     "roll +6": {
+      "app_pose": {
+       "xor": 261.5,
+       "overhang": 154.25,
+       "uncovered": 107.25,
+       "model": 758.0,
+       "observed": 711.0,
+       "iou": 0.6977752094770298
+      },
+      "app_pose_visible": {
+       "xor": 154.1875,
+       "overhang": 46.9375,
+       "uncovered": 107.25,
+       "model": 650.6875,
+       "observed": 711.0,
+       "iou": 0.7965696379978561
+      },
+      "full": {
+       "xor": 103.75,
+       "overhang": 84.5,
+       "uncovered": 19.25,
+       "model": 776.25,
+       "observed": 711.0,
+       "iou": 0.8695788812067882,
+       "dx": 1.0,
+       "dy": -4.0,
+       "model_bottom_y": 90.77436165037737,
+       "model_top_y": 62.15769547231504,
+       "model_toe_x": 158.90962015631277
+      },
+      "visible": {
+       "xor": 88.5,
+       "overhang": 64.375,
+       "uncovered": 24.125,
+       "model": 751.25,
+       "observed": 711.0,
+       "iou": 0.8858616798323392,
+       "dx": 1.0,
+       "dy": -3.25,
+       "model_bottom_y": 91.52436165037737,
+       "model_top_y": 62.90769547231504,
+       "model_toe_x": 158.90962015631277
+      }
+     }
+    },
+    "depth_mm": 2052.7878607815164
+   },
+   "IN-AIR f42 floor 5": {
+    "obs": {
+     "x_cut": 126.19507302429629,
+     "toe_x": 160.5,
+     "top_y": 61.5,
+     "bottom_y": 90.5
+    },
+    "line": [
+     82.20920616543442,
+     0.4869982930623316,
+     0.1645840544002215,
+     57
+    ],
+    "table": {
+     "supplied": {
+      "app_pose": {
+       "xor": 260.75,
+       "overhang": 113.875,
+       "uncovered": 146.875,
+       "model": 734.0,
+       "observed": 767.0,
+       "iou": 0.7039875124166312
+      },
+      "app_pose_visible": {
+       "xor": 150.9375,
+       "overhang": 4.0625,
+       "uncovered": 146.875,
+       "model": 624.1875,
+       "observed": 767.0,
+       "iou": 0.8042473859122964
+      },
+      "full": {
+       "xor": 54.5625,
+       "overhang": 22.3125,
+       "uncovered": 32.25,
+       "model": 757.0625,
+       "observed": 767.0,
+       "iou": 0.9308733866497744,
+       "dx": 1.25,
+       "dy": -4.25,
+       "model_bottom_y": 89.64924951354553,
+       "model_top_y": 62.97569317304966,
+       "model_toe_x": 159.27086331209654
+      },
+      "visible": {
+       "xor": 49.9375,
+       "overhang": 15.25,
+       "uncovered": 34.6875,
+       "model": 747.5625,
+       "observed": 767.0,
+       "iou": 0.9361617130073506,
+       "dx": 1.25,
+       "dy": -3.75,
+       "model_bottom_y": 90.14924951354553,
+       "model_top_y": 63.47569317304966,
+       "model_toe_x": 159.27086331209654
+      }
+     }
+    },
+    "depth_mm": 2052.7878607815164
+   },
+   "IN-AIR f42 floor 12": {
+    "obs": {
+     "x_cut": 125.95157387776513,
+     "toe_x": 159.5,
+     "top_y": 62.5,
+     "bottom_y": 89.5
+    },
+    "line": [
+     82.20920616543442,
+     0.4869982930623316,
+     0.1645840544002215,
+     57
+    ],
+    "table": {
+     "supplied": {
+      "app_pose": {
+       "xor": 302.5,
+       "overhang": 204.0,
+       "uncovered": 98.5,
+       "model": 752.5,
+       "observed": 647.0,
+       "iou": 0.6445358401880141
+      },
+      "app_pose_visible": {
+       "xor": 157.375,
+       "overhang": 58.875,
+       "uncovered": 98.5,
+       "model": 607.375,
+       "observed": 647.0,
+       "iou": 0.7770497609350098
+      },
+      "full": {
+       "xor": 123.4375,
+       "overhang": 116.75,
+       "uncovered": 6.6875,
+       "model": 757.0625,
+       "observed": 647.0,
+       "iou": 0.838379705400982,
+       "dx": 0.25,
+       "dy": -4.75,
+       "model_bottom_y": 89.14924951354553,
+       "model_top_y": 62.47569317304966,
+       "model_toe_x": 158.27086331209654
+      },
+      "visible": {
+       "xor": 90.5625,
+       "overhang": 71.1875,
+       "uncovered": 19.375,
+       "model": 698.8125,
+       "observed": 647.0,
+       "iou": 0.8739013140718823,
+       "dx": 0.5,
+       "dy": -2.75,
+       "model_bottom_y": 91.14924951354553,
+       "model_top_y": 64.47569317304966,
+       "model_toe_x": 158.52086331209654
+      }
+     }
+    },
+    "depth_mm": 2052.7878607815164
+   },
+   "NEAR f43 floor 8": {
+    "obs": {
+     "x_cut": 126.40468714551344,
+     "toe_x": 165.5,
+     "top_y": 59.5,
+     "bottom_y": 89.5
+    },
+    "line": [
+     82.87098968792574,
+     0.5004492994345024,
+     0.14011551580374848,
+     58
+    ],
+    "table": {
+     "supplied": {
+      "app_pose": {
+       "xor": 230.125,
+       "overhang": 10.0625,
+       "uncovered": 220.0625,
+       "model": 774.0,
+       "observed": 984.0,
+       "iou": 0.7685004715498271
+      },
+      "app_pose_visible": {
+       "xor": 230.125,
+       "overhang": 10.0625,
+       "uncovered": 220.0625,
+       "model": 774.0,
+       "observed": 984.0,
+       "iou": 0.7685004715498271
+      },
+      "full": {
+       "xor": 222.125,
+       "overhang": 4.4375,
+       "uncovered": 217.6875,
+       "model": 770.75,
+       "observed": 984.0,
+       "iou": 0.7752766361049637,
+       "dx": -0.25,
+       "dy": -2.0,
+       "model_bottom_y": 85.7979374305445,
+       "model_top_y": 60.574797850649865,
+       "model_toe_x": 163.7978544659655
+      },
+      "visible": {
+       "xor": 222.125,
+       "overhang": 4.4375,
+       "uncovered": 217.6875,
+       "model": 770.75,
+       "observed": 984.0,
+       "iou": 0.7752766361049637,
+       "dx": -0.25,
+       "dy": -2.0,
+       "model_bottom_y": 85.7979374305445,
+       "model_top_y": 60.574797850649865,
+       "model_toe_x": 163.7978544659655
+      }
+     },
+     "size 0.85": {
+      "app_pose": {
+       "xor": 396.9375,
+       "overhang": 0.0,
+       "uncovered": 396.9375,
+       "model": 587.0625,
+       "observed": 984.0,
+       "iou": 0.596608231707317
+      },
+      "app_pose_visible": {
+       "xor": 396.9375,
+       "overhang": 0.0,
+       "uncovered": 396.9375,
+       "model": 587.0625,
+       "observed": 984.0,
+       "iou": 0.596608231707317
+      },
+      "full": {
+       "xor": 374.0625,
+       "overhang": 2.375,
+       "uncovered": 371.6875,
+       "model": 614.6875,
+       "observed": 984.0,
+       "iou": 0.6207704980357369,
+       "dx": 3.0,
+       "dy": 0.5,
+       "model_bottom_y": 86.7258388539313,
+       "model_top_y": 65.29276972368389,
+       "model_toe_x": 163.9757229297609
+      },
+      "visible": {
+       "xor": 374.0625,
+       "overhang": 2.375,
+       "uncovered": 371.6875,
+       "model": 614.6875,
+       "observed": 984.0,
+       "iou": 0.6207704980357369,
+       "dx": 3.0,
+       "dy": 0.5,
+       "model_bottom_y": 86.7258388539313,
+       "model_top_y": 65.29276972368389,
+       "model_toe_x": 163.9757229297609
+      }
+     },
+     "size 0.90": {
+      "app_pose": {
+       "xor": 338.5,
+       "overhang": 0.1875,
+       "uncovered": 338.3125,
+       "model": 645.875,
+       "observed": 984.0,
+       "iou": 0.6560614720264177
+      },
+      "app_pose_visible": {
+       "xor": 338.5,
+       "overhang": 0.1875,
+       "uncovered": 338.3125,
+       "model": 645.875,
+       "observed": 984.0,
+       "iou": 0.6560614720264177
+      },
+      "full": {
+       "xor": 324.0,
+       "overhang": 1.8125,
+       "uncovered": 322.1875,
+       "model": 663.625,
+       "observed": 984.0,
+       "iou": 0.6713370950358207,
+       "dx": 1.75,
+       "dy": 0.25,
+       "model_bottom_y": 87.00010426025742,
+       "model_top_y": 64.30394101827794,
+       "model_toe_x": 163.74954496096478
+      },
+      "visible": {
+       "xor": 324.0,
+       "overhang": 1.8125,
+       "uncovered": 322.1875,
+       "model": 663.625,
+       "observed": 984.0,
+       "iou": 0.6713370950358207,
+       "dx": 1.75,
+       "dy": 0.25,
+       "model_bottom_y": 87.00010426025742,
+       "model_top_y": 64.30394101827794,
+       "model_toe_x": 163.74954496096478
+      }
+     },
+     "size 0.95": {
+      "app_pose": {
+       "xor": 278.375,
+       "overhang": 1.625,
+       "uncovered": 276.75,
+       "model": 708.875,
+       "observed": 984.0,
+       "iou": 0.717564996829423
+      },
+      "app_pose_visible": {
+       "xor": 278.375,
+       "overhang": 1.625,
+       "uncovered": 276.75,
+       "model": 708.875,
+       "observed": 984.0,
+       "iou": 0.717564996829423
+      },
+      "full": {
+       "xor": 272.0,
+       "overhang": 4.125,
+       "uncovered": 267.875,
+       "model": 720.25,
+       "observed": 984.0,
+       "iou": 0.7247311827956989,
+       "dx": 1.0,
+       "dy": -0.5,
+       "model_bottom_y": 86.77413706754172,
+       "model_top_y": 62.81461722653327,
+       "model_toe_x": 164.02358878234054
+      },
+      "visible": {
+       "xor": 272.0,
+       "overhang": 4.125,
+       "uncovered": 267.875,
+       "model": 720.25,
+       "observed": 984.0,
+       "iou": 0.7247311827956989,
+       "dx": 1.0,
+       "dy": -0.5,
+       "model_bottom_y": 86.77413706754172,
+       "model_top_y": 62.81461722653327,
+       "model_toe_x": 164.02358878234054
+      }
+     },
+     "size 1.05": {
+      "app_pose": {
+       "xor": 208.625,
+       "overhang": 34.0625,
+       "uncovered": 174.5625,
+       "model": 843.5,
+       "observed": 984.0,
+       "iou": 0.7950764319479403
+      },
+      "app_pose_visible": {
+       "xor": 208.625,
+       "overhang": 34.0625,
+       "uncovered": 174.5625,
+       "model": 843.5,
+       "observed": 984.0,
+       "iou": 0.7950764319479403
+      },
+      "full": {
+       "xor": 171.3125,
+       "overhang": 6.4375,
+       "uncovered": 164.875,
+       "model": 825.5625,
+       "observed": 984.0,
+       "iou": 0.82703350791948,
+       "dx": -1.25,
+       "dy": -1.5,
+       "model_bottom_y": 86.82150550388882,
+       "model_top_y": 60.3344823921601,
+       "model_toe_x": 163.82234208394812
+      },
+      "visible": {
+       "xor": 171.3125,
+       "overhang": 6.4375,
+       "uncovered": 164.875,
+       "model": 825.5625,
+       "observed": 984.0,
+       "iou": 0.82703350791948,
+       "dx": -1.25,
+       "dy": -1.5,
+       "model_bottom_y": 86.82150550388882,
+       "model_top_y": 60.3344823921601,
+       "model_toe_x": 163.82234208394812
+      }
+     },
+     "size 1.10": {
+      "app_pose": {
+       "xor": 212.75,
+       "overhang": 70.5625,
+       "uncovered": 142.1875,
+       "model": 912.375,
+       "observed": 984.0,
+       "iou": 0.7982575712677058
+      },
+      "app_pose_visible": {
+       "xor": 209.25,
+       "overhang": 67.0625,
+       "uncovered": 142.1875,
+       "model": 908.875,
+       "observed": 984.0,
+       "iou": 0.8009157400249747
+      },
+      "full": {
+       "xor": 128.75,
+       "overhang": 10.5,
+       "uncovered": 118.25,
+       "model": 876.25,
+       "observed": 984.0,
+       "iou": 0.8705379587732529,
+       "dx": -2.25,
+       "dy": -1.25,
+       "model_bottom_y": 87.59484144206058,
+       "model_top_y": 59.84367035192763,
+       "model_toe_x": 163.8470517084282
+      },
+      "visible": {
+       "xor": 128.75,
+       "overhang": 10.5,
+       "uncovered": 118.25,
+       "model": 876.25,
+       "observed": 984.0,
+       "iou": 0.8705379587732529,
+       "dx": -2.25,
+       "dy": -1.25,
+       "model_bottom_y": 87.59484144206058,
+       "model_top_y": 59.84367035192763,
+       "model_toe_x": 163.8470517084282
+      }
+     },
+     "size 1.15": {
+      "app_pose": {
+       "xor": 246.875,
+       "overhang": 123.3125,
+       "uncovered": 123.5625,
+       "model": 983.75,
+       "observed": 984.0,
+       "iou": 0.7770502906812666
+      },
+      "app_pose_visible": {
+       "xor": 229.875,
+       "overhang": 106.3125,
+       "uncovered": 123.5625,
+       "model": 966.75,
+       "observed": 984.0,
+       "iou": 0.7891659501289768
+      },
+      "full": {
+       "xor": 95.625,
+       "overhang": 14.625,
+       "uncovered": 81.0,
+       "model": 917.625,
+       "observed": 984.0,
+       "iou": 0.9042433345850545,
+       "dx": -3.75,
+       "dy": -1.25,
+       "model_bottom_y": 88.11794539940877,
+       "model_top_y": 59.10236123014627,
+       "model_toe_x": 163.37198341157682
+      },
+      "visible": {
+       "xor": 95.625,
+       "overhang": 14.625,
+       "uncovered": 81.0,
+       "model": 917.625,
+       "observed": 984.0,
+       "iou": 0.9042433345850545,
+       "dx": -3.75,
+       "dy": -1.25,
+       "model_bottom_y": 88.11794539940877,
+       "model_top_y": 59.10236123014627,
+       "model_toe_x": 163.37198341157682
+      }
+     },
+     "face -10": {
+      "app_pose": {
+       "xor": 244.5,
+       "overhang": 29.8125,
+       "uncovered": 214.6875,
+       "model": 799.125,
+       "observed": 984.0,
+       "iou": 0.7588311448122804
+      },
+      "app_pose_visible": {
+       "xor": 244.5,
+       "overhang": 29.8125,
+       "uncovered": 214.6875,
+       "model": 799.125,
+       "observed": 984.0,
+       "iou": 0.7588311448122804
+      },
+      "full": {
+       "xor": 216.4375,
+       "overhang": 2.75,
+       "uncovered": 213.6875,
+       "model": 773.0625,
+       "observed": 984.0,
+       "iou": 0.7806561945781606,
+       "dx": -2.0,
+       "dy": -2.0,
+       "model_bottom_y": 85.80480235771775,
+       "model_top_y": 60.60666057095801,
+       "model_toe_x": 161.75803909067662
+      },
+      "visible": {
+       "xor": 216.4375,
+       "overhang": 2.75,
+       "uncovered": 213.6875,
+       "model": 773.0625,
+       "observed": 984.0,
+       "iou": 0.7806561945781606,
+       "dx": -2.0,
+       "dy": -2.0,
+       "model_bottom_y": 85.80480235771775,
+       "model_top_y": 60.60666057095801,
+       "model_toe_x": 161.75803909067662
+      }
+     },
+     "face +10": {
+      "app_pose": {
+       "xor": 225.375,
+       "overhang": 5.625,
+       "uncovered": 219.75,
+       "model": 769.875,
+       "observed": 984.0,
+       "iou": 0.7722622205380826
+      },
+      "app_pose_visible": {
+       "xor": 225.375,
+       "overhang": 5.625,
+       "uncovered": 219.75,
+       "model": 769.875,
+       "observed": 984.0,
+       "iou": 0.7722622205380826
+      },
+      "full": {
+       "xor": 216.875,
+       "overhang": 4.625,
+       "uncovered": 212.25,
+       "model": 776.375,
+       "observed": 984.0,
+       "iou": 0.7806296624099127,
+       "dx": 0.5,
+       "dy": -1.75,
+       "model_bottom_y": 86.04398626044662,
+       "model_top_y": 60.79627426126342,
+       "model_toe_x": 164.3233297364809
+      },
+      "visible": {
+       "xor": 216.875,
+       "overhang": 4.625,
+       "uncovered": 212.25,
+       "model": 776.375,
+       "observed": 984.0,
+       "iou": 0.7806296624099127,
+       "dx": 0.5,
+       "dy": -1.75,
+       "model_bottom_y": 86.04398626044662,
+       "model_top_y": 60.79627426126342,
+       "model_toe_x": 164.3233297364809
+      }
+     },
+     "face +20": {
+      "app_pose": {
+       "xor": 223.4375,
+       "overhang": 4.5,
+       "uncovered": 218.9375,
+       "model": 769.5625,
+       "observed": 984.0,
+       "iou": 0.7739630753667173
+      },
+      "app_pose_visible": {
+       "xor": 223.4375,
+       "overhang": 4.5,
+       "uncovered": 218.9375,
+       "model": 769.5625,
+       "observed": 984.0,
+       "iou": 0.7739630753667173
+      },
+      "full": {
+       "xor": 203.625,
+       "overhang": 2.875,
+       "uncovered": 200.75,
+       "model": 786.125,
+       "observed": 984.0,
+       "iou": 0.793666877770741,
+       "dx": 1.25,
+       "dy": -1.5,
+       "model_bottom_y": 86.29127515297161,
+       "model_top_y": 61.02199486201323,
+       "model_toe_x": 164.33008702688034
+      },
+      "visible": {
+       "xor": 203.625,
+       "overhang": 2.875,
+       "uncovered": 200.75,
+       "model": 786.125,
+       "observed": 984.0,
+       "iou": 0.793666877770741,
+       "dx": 1.25,
+       "dy": -1.5,
+       "model_bottom_y": 86.29127515297161,
+       "model_top_y": 61.02199486201323,
+       "model_toe_x": 164.33008702688034
+      }
+     },
+     "face +30": {
+      "app_pose": {
+       "xor": 237.75,
+       "overhang": 4.0,
+       "uncovered": 233.75,
+       "model": 754.25,
+       "observed": 984.0,
+       "iou": 0.7593623481781376
+      },
+      "app_pose_visible": {
+       "xor": 237.75,
+       "overhang": 4.0,
+       "uncovered": 233.75,
+       "model": 754.25,
+       "observed": 984.0,
+       "iou": 0.7593623481781376
+      },
+      "full": {
+       "xor": 200.125,
+       "overhang": 1.4375,
+       "uncovered": 198.6875,
+       "model": 786.75,
+       "observed": 984.0,
+       "iou": 0.7969176127354601,
+       "dx": 2.5,
+       "dy": -1.0,
+       "model_bottom_y": 86.78988399983271,
+       "model_top_y": 61.50273703010937,
+       "model_toe_x": 164.3261289915993
+      },
+      "visible": {
+       "xor": 200.125,
+       "overhang": 1.4375,
+       "uncovered": 198.6875,
+       "model": 786.75,
+       "observed": 984.0,
+       "iou": 0.7969176127354601,
+       "dx": 2.5,
+       "dy": -1.0,
+       "model_bottom_y": 86.78988399983271,
+       "model_top_y": 61.50273703010937,
+       "model_toe_x": 164.3261289915993
+      }
+     },
+     "loft -10": {
+      "app_pose": {
+       "xor": 204.5,
+       "overhang": 17.6875,
+       "uncovered": 186.8125,
+       "model": 814.875,
+       "observed": 984.0,
+       "iou": 0.7958445123853497
+      },
+      "app_pose_visible": {
+       "xor": 204.5,
+       "overhang": 17.6875,
+       "uncovered": 186.8125,
+       "model": 814.875,
+       "observed": 984.0,
+       "iou": 0.7958445123853497
+      },
+      "full": {
+       "xor": 183.0,
+       "overhang": 5.25,
+       "uncovered": 177.75,
+       "model": 811.5,
+       "observed": 984.0,
+       "iou": 0.8150113722517058,
+       "dx": -0.25,
+       "dy": -1.5,
+       "model_bottom_y": 86.8760635199516,
+       "model_top_y": 60.336669546459845,
+       "model_toe_x": 163.79055559263676
+      },
+      "visible": {
+       "xor": 183.0,
+       "overhang": 5.25,
+       "uncovered": 177.75,
+       "model": 811.5,
+       "observed": 984.0,
+       "iou": 0.8150113722517058,
+       "dx": -0.25,
+       "dy": -1.5,
+       "model_bottom_y": 86.8760635199516,
+       "model_top_y": 60.336669546459845,
+       "model_toe_x": 163.79055559263676
+      }
+     },
+     "loft +10": {
+      "app_pose": {
+       "xor": 280.8125,
+       "overhang": 5.1875,
+       "uncovered": 275.625,
+       "model": 713.5625,
+       "observed": 984.0,
+       "iou": 0.7161180261578316
+      },
+      "app_pose_visible": {
+       "xor": 280.8125,
+       "overhang": 5.1875,
+       "uncovered": 275.625,
+       "model": 713.5625,
+       "observed": 984.0,
+       "iou": 0.7161180261578316
+      },
+      "full": {
+       "xor": 280.0625,
+       "overhang": 3.3125,
+       "uncovered": 276.75,
+       "model": 710.5625,
+       "observed": 984.0,
+       "iou": 0.7163385452934101,
+       "dx": -0.25,
+       "dy": -1.0,
+       "model_bottom_y": 85.90415540033997,
+       "model_top_y": 62.76704954834408,
+       "model_toe_x": 163.80466820095518
+      },
+      "visible": {
+       "xor": 280.0625,
+       "overhang": 3.3125,
+       "uncovered": 276.75,
+       "model": 710.5625,
+       "observed": 984.0,
+       "iou": 0.7163385452934101,
+       "dx": -0.25,
+       "dy": -1.0,
+       "model_bottom_y": 85.90415540033997,
+       "model_top_y": 62.76704954834408,
+       "model_toe_x": 163.80466820095518
+      }
+     },
+     "loft +20": {
+      "app_pose": {
+       "xor": 362.0,
+       "overhang": 3.375,
+       "uncovered": 358.625,
+       "model": 628.75,
+       "observed": 984.0,
+       "iou": 0.6333713128244082
+      },
+      "app_pose_visible": {
+       "xor": 362.0,
+       "overhang": 3.375,
+       "uncovered": 358.625,
+       "model": 628.75,
+       "observed": 984.0,
+       "iou": 0.6333713128244082
+      },
+      "full": {
+       "xor": 362.0,
+       "overhang": 3.375,
+       "uncovered": 358.625,
+       "model": 628.75,
+       "observed": 984.0,
+       "iou": 0.6333713128244082,
+       "dx": 0.0,
+       "dy": 0.0,
+       "model_bottom_y": 85.72304107845625,
+       "model_top_y": 65.37963265445042,
+       "model_toe_x": 164.06179545264348
+      },
+      "visible": {
+       "xor": 362.0,
+       "overhang": 3.375,
+       "uncovered": 358.625,
+       "model": 628.75,
+       "observed": 984.0,
+       "iou": 0.6333713128244082,
+       "dx": 0.0,
+       "dy": 0.0,
+       "model_bottom_y": 85.72304107845625,
+       "model_top_y": 65.37963265445042,
+       "model_toe_x": 164.06179545264348
+      }
+     },
+     "roll -6": {
+      "app_pose": {
+       "xor": 250.3125,
+       "overhang": 19.3125,
+       "uncovered": 231.0,
+       "model": 772.3125,
+       "observed": 984.0,
+       "iou": 0.7505139226312839
+      },
+      "app_pose_visible": {
+       "xor": 250.3125,
+       "overhang": 19.3125,
+       "uncovered": 231.0,
+       "model": 772.3125,
+       "observed": 984.0,
+       "iou": 0.7505139226312839
+      },
+      "full": {
+       "xor": 226.0625,
+       "overhang": 3.875,
+       "uncovered": 222.1875,
+       "model": 765.6875,
+       "observed": 984.0,
+       "iou": 0.7711628495508035,
+       "dx": -0.5,
+       "dy": -1.75,
+       "model_bottom_y": 86.42292723432796,
+       "model_top_y": 61.910381420315616,
+       "model_toe_x": 163.70399506633146
+      },
+      "visible": {
+       "xor": 226.0625,
+       "overhang": 3.875,
+       "uncovered": 222.1875,
+       "model": 765.6875,
+       "observed": 984.0,
+       "iou": 0.7711628495508035,
+       "dx": -0.5,
+       "dy": -1.75,
+       "model_bottom_y": 86.42292723432796,
+       "model_top_y": 61.910381420315616,
+       "model_toe_x": 163.70399506633146
+      }
+     },
+     "roll -3": {
+      "app_pose": {
+       "xor": 237.625,
+       "overhang": 13.5,
+       "uncovered": 224.125,
+       "model": 773.375,
+       "observed": 984.0,
+       "iou": 0.7617794486215539
+      },
+      "app_pose_visible": {
+       "xor": 237.625,
+       "overhang": 13.5,
+       "uncovered": 224.125,
+       "model": 773.375,
+       "observed": 984.0,
+       "iou": 0.7617794486215539
+      },
+      "full": {
+       "xor": 222.5,
+       "overhang": 4.3125,
+       "uncovered": 218.1875,
+       "model": 770.125,
+       "observed": 984.0,
+       "iou": 0.7748687788528426,
+       "dx": -0.25,
+       "dy": -1.25,
+       "model_bottom_y": 86.60472163786203,
+       "model_top_y": 61.858328858107456,
+       "model_toe_x": 163.86690428123666
+      },
+      "visible": {
+       "xor": 222.5,
+       "overhang": 4.3125,
+       "uncovered": 218.1875,
+       "model": 770.125,
+       "observed": 984.0,
+       "iou": 0.7748687788528426,
+       "dx": -0.25,
+       "dy": -1.25,
+       "model_bottom_y": 86.60472163786203,
+       "model_top_y": 61.858328858107456,
+       "model_toe_x": 163.86690428123666
+      }
+     },
+     "roll +3": {
+      "app_pose": {
+       "xor": 224.375,
+       "overhang": 9.0625,
+       "uncovered": 215.3125,
+       "model": 777.75,
+       "observed": 984.0,
+       "iou": 0.7740575240732582
+      },
+      "app_pose_visible": {
+       "xor": 224.375,
+       "overhang": 9.0625,
+       "uncovered": 215.3125,
+       "model": 777.75,
+       "observed": 984.0,
+       "iou": 0.7740575240732582
+      },
+      "full": {
+       "xor": 218.4375,
+       "overhang": 4.5,
+       "uncovered": 213.9375,
+       "model": 774.5625,
+       "observed": 984.0,
+       "iou": 0.77902124430956,
+       "dx": -0.25,
+       "dy": -1.75,
+       "model_bottom_y": 86.40838516816976,
+       "model_top_y": 60.31626716081462,
+       "model_toe_x": 163.7437640507621
+      },
+      "visible": {
+       "xor": 218.4375,
+       "overhang": 4.5,
+       "uncovered": 213.9375,
+       "model": 774.5625,
+       "observed": 984.0,
+       "iou": 0.77902124430956,
+       "dx": -0.25,
+       "dy": -1.75,
+       "model_bottom_y": 86.40838516816976,
+       "model_top_y": 60.31626716081462,
+       "model_toe_x": 163.7437640507621
+      }
+     },
+     "roll +6": {
+      "app_pose": {
+       "xor": 224.9375,
+       "overhang": 10.8125,
+       "uncovered": 214.125,
+       "model": 780.6875,
+       "observed": 984.0,
+       "iou": 0.773889552051266
+      },
+      "app_pose_visible": {
+       "xor": 224.9375,
+       "overhang": 10.8125,
+       "uncovered": 214.125,
+       "model": 780.6875,
+       "observed": 984.0,
+       "iou": 0.773889552051266
+      },
+      "full": {
+       "xor": 218.3125,
+       "overhang": 7.5,
+       "uncovered": 210.8125,
+       "model": 780.6875,
+       "observed": 984.0,
+       "iou": 0.7798159354513363,
+       "dx": 0.0,
+       "dy": -1.5,
+       "model_bottom_y": 87.12954158871517,
+       "model_top_y": 60.06619506942701,
+       "model_toe_x": 163.94332058460725
+      },
+      "visible": {
+       "xor": 218.3125,
+       "overhang": 7.5,
+       "uncovered": 210.8125,
+       "model": 780.6875,
+       "observed": 984.0,
+       "iou": 0.7798159354513363,
+       "dx": 0.0,
+       "dy": -1.5,
+       "model_bottom_y": 87.12954158871517,
+       "model_top_y": 60.06619506942701,
+       "model_toe_x": 163.94332058460725
+      }
+     }
+    },
+    "depth_mm": 2175.8466337029595
+   },
+   "NEAR f43 floor 5": {
+    "obs": {
+     "x_cut": 126.20691707368778,
+     "toe_x": 169.5,
+     "top_y": 57.5,
+     "bottom_y": 90.5
+    },
+    "line": [
+     82.85361860032822,
+     0.5013865566893899,
+     0.13381353712857225,
+     56
+    ],
+    "table": {
+     "supplied": {
+      "app_pose": {
+       "xor": 341.75,
+       "overhang": 0.875,
+       "uncovered": 340.875,
+       "model": 774.0,
+       "observed": 1114.0,
+       "iou": 0.6934633927570355
+      },
+      "app_pose_visible": {
+       "xor": 341.75,
+       "overhang": 0.875,
+       "uncovered": 340.875,
+       "model": 774.0,
+       "observed": 1114.0,
+       "iou": 0.6934633927570355
+      },
+      "full": {
+       "xor": 307.5625,
+       "overhang": 1.8125,
+       "uncovered": 305.75,
+       "model": 810.0625,
+       "observed": 1114.0,
+       "iou": 0.7243600515319554,
+       "dx": 3.0,
+       "dy": -1.25,
+       "model_bottom_y": 86.5479374305445,
+       "model_top_y": 61.324797850649865,
+       "model_toe_x": 167.0478544659655
+      },
+      "visible": {
+       "xor": 307.5625,
+       "overhang": 1.8125,
+       "uncovered": 305.75,
+       "model": 810.0625,
+       "observed": 1114.0,
+       "iou": 0.7243600515319554,
+       "dx": 3.0,
+       "dy": -1.25,
+       "model_bottom_y": 86.5479374305445,
+       "model_top_y": 61.324797850649865,
+       "model_toe_x": 167.0478544659655
+      }
+     }
+    },
+    "depth_mm": 2175.8466337029595
+   },
+   "NEAR f43 floor 12": {
+    "obs": {
+     "x_cut": 126.6180764420246,
+     "toe_x": 165.5,
+     "top_y": 59.5,
+     "bottom_y": 89.5
+    },
+    "line": [
+     82.88337679785337,
+     0.49979734628041356,
+     0.14711081674948184,
+     59
+    ],
+    "table": {
+     "supplied": {
+      "app_pose": {
+       "xor": 216.25,
+       "overhang": 42.125,
+       "uncovered": 174.125,
+       "model": 774.0,
+       "observed": 906.0,
+       "iou": 0.7719182597231378
+      },
+      "app_pose_visible": {
+       "xor": 216.25,
+       "overhang": 42.125,
+       "uncovered": 174.125,
+       "model": 774.0,
+       "observed": 906.0,
+       "iou": 0.7719182597231378
+      },
+      "full": {
+       "xor": 188.75,
+       "overhang": 11.3125,
+       "uncovered": 177.4375,
+       "model": 739.875,
+       "observed": 906.0,
+       "iou": 0.7942358792668801,
+       "dx": -2.5,
+       "dy": -2.25,
+       "model_bottom_y": 85.5479374305445,
+       "model_top_y": 60.324797850649865,
+       "model_toe_x": 161.5478544659655
+      },
+      "visible": {
+       "xor": 188.75,
+       "overhang": 11.3125,
+       "uncovered": 177.4375,
+       "model": 739.875,
+       "observed": 906.0,
+       "iou": 0.7942358792668801,
+       "dx": -2.5,
+       "dy": -2.25,
+       "model_bottom_y": 85.5479374305445,
+       "model_top_y": 60.324797850649865,
+       "model_toe_x": 161.5478544659655
+      }
+     }
+    },
+    "depth_mm": 2175.8466337029595
+   }
+  },
+  "4": {
+   "IN-AIR f43 floor 8": {
+    "obs": {
+     "x_cut": 151.20950389013348,
+     "toe_x": 184.5,
+     "top_y": 65.5,
+     "bottom_y": 95.5
+    },
+    "line": [
+     104.39200509513265,
+     0.5008282060736299,
+     0.13434808081823765,
+     59
+    ],
+    "table": {
+     "supplied": {
+      "app_pose": {
+       "xor": 671.1875,
+       "overhang": 296.3125,
+       "uncovered": 374.875,
+       "model": 725.4375,
+       "observed": 804.0,
+       "iou": 0.3900028401022437
+      },
+      "app_pose_visible": {
+       "xor": 671.1875,
+       "overhang": 296.3125,
+       "uncovered": 374.875,
+       "model": 725.4375,
+       "observed": 804.0,
+       "iou": 0.3900028401022437
+      },
+      "full": {
+       "xor": 77.375,
+       "overhang": 4.0625,
+       "uncovered": 73.3125,
+       "model": 734.75,
+       "observed": 804.0,
+       "iou": 0.9042462680795111,
+       "dx": 0.5,
+       "dy": 10.25,
+       "model_bottom_y": 92.83396924830564,
+       "model_top_y": 67.32479012347834,
+       "model_toe_x": 184.38039321455437
+      },
+      "visible": {
+       "xor": 77.375,
+       "overhang": 4.0625,
+       "uncovered": 73.3125,
+       "model": 734.75,
+       "observed": 804.0,
+       "iou": 0.9042462680795111,
+       "dx": 0.5,
+       "dy": 10.25,
+       "model_bottom_y": 92.83396924830564,
+       "model_top_y": 67.32479012347834,
+       "model_toe_x": 184.38039321455437
+      }
+     },
+     "size 0.85": {
+      "app_pose": {
+       "xor": 648.125,
+       "overhang": 195.875,
+       "uncovered": 452.25,
+       "model": 547.625,
+       "observed": 804.0,
+       "iou": 0.3517939742467808
+      },
+      "app_pose_visible": {
+       "xor": 648.125,
+       "overhang": 195.875,
+       "uncovered": 452.25,
+       "model": 547.625,
+       "observed": 804.0,
+       "iou": 0.3517939742467808
+      },
+      "full": {
+       "xor": 200.5625,
+       "overhang": 2.3125,
+       "uncovered": 198.25,
+       "model": 608.0625,
+       "observed": 804.0,
+       "iou": 0.7512595922796682,
+       "dx": 4.25,
+       "dy": 10.5,
+       "model_bottom_y": 91.47327030163984,
+       "model_top_y": 69.80287126680751,
+       "model_toe_x": 184.6551639281598
+      },
+      "visible": {
+       "xor": 200.5625,
+       "overhang": 2.3125,
+       "uncovered": 198.25,
+       "model": 608.0625,
+       "observed": 804.0,
+       "iou": 0.7512595922796682,
+       "dx": 4.25,
+       "dy": 10.5,
+       "model_bottom_y": 91.47327030163984,
+       "model_top_y": 69.80287126680751,
+       "model_toe_x": 184.6551639281598
+      }
+     },
+     "size 0.90": {
+      "app_pose": {
+       "xor": 651.25,
+       "overhang": 225.8125,
+       "uncovered": 425.4375,
+       "model": 604.375,
+       "observed": 804.0,
+       "iou": 0.367603325848152
+      },
+      "app_pose_visible": {
+       "xor": 651.25,
+       "overhang": 225.8125,
+       "uncovered": 425.4375,
+       "model": 604.375,
+       "observed": 804.0,
+       "iou": 0.367603325848152
+      },
+      "full": {
+       "xor": 157.375,
+       "overhang": 2.4375,
+       "uncovered": 154.9375,
+       "model": 651.5,
+       "observed": 804.0,
+       "iou": 0.8048515849027358,
+       "dx": 3.0,
+       "dy": 10.5,
+       "model_bottom_y": 92.01050038522582,
+       "model_top_y": 69.06100443165262,
+       "model_toe_x": 184.5629664988656
+      },
+      "visible": {
+       "xor": 157.375,
+       "overhang": 2.4375,
+       "uncovered": 154.9375,
+       "model": 651.5,
+       "observed": 804.0,
+       "iou": 0.8048515849027358,
+       "dx": 3.0,
+       "dy": 10.5,
+       "model_bottom_y": 92.01050038522582,
+       "model_top_y": 69.06100443165262,
+       "model_toe_x": 184.5629664988656
+      }
+     },
+     "size 0.95": {
+      "app_pose": {
+       "xor": 660.125,
+       "overhang": 260.0,
+       "uncovered": 400.125,
+       "model": 663.875,
+       "observed": 804.0,
+       "iou": 0.37958176691729323
+      },
+      "app_pose_visible": {
+       "xor": 660.125,
+       "overhang": 260.0,
+       "uncovered": 400.125,
+       "model": 663.875,
+       "observed": 804.0,
+       "iou": 0.37958176691729323
+      },
+      "full": {
+       "xor": 115.9375,
+       "overhang": 2.9375,
+       "uncovered": 113.0,
+       "model": 693.9375,
+       "observed": 804.0,
+       "iou": 0.8563240647509875,
+       "dx": 1.75,
+       "dy": 10.0,
+       "model_bottom_y": 92.04739993246275,
+       "model_top_y": 67.81831117776967,
+       "model_toe_x": 184.47118068480358
+      },
+      "visible": {
+       "xor": 115.9375,
+       "overhang": 2.9375,
+       "uncovered": 113.0,
+       "model": 693.9375,
+       "observed": 804.0,
+       "iou": 0.8563240647509875,
+       "dx": 1.75,
+       "dy": 10.0,
+       "model_bottom_y": 92.04739993246275,
+       "model_top_y": 67.81831117776967,
+       "model_toe_x": 184.47118068480358
+      }
+     },
+     "size 1.05": {
+      "app_pose": {
+       "xor": 685.125,
+       "overhang": 336.875,
+       "uncovered": 348.25,
+       "model": 792.625,
+       "observed": 804.0,
+       "iou": 0.3994740878711515
+      },
+      "app_pose_visible": {
+       "xor": 685.125,
+       "overhang": 336.875,
+       "uncovered": 348.25,
+       "model": 792.625,
+       "observed": 804.0,
+       "iou": 0.3994740878711515
+      },
+      "full": {
+       "xor": 43.125,
+       "overhang": 10.9375,
+       "uncovered": 32.1875,
+       "model": 782.75,
+       "observed": 804.0,
+       "iou": 0.9470818314287905,
+       "dx": -0.5,
+       "dy": 10.5,
+       "model_bottom_y": 93.62020863733449,
+       "model_top_y": 66.83043988401658,
+       "model_toe_x": 184.54031894986088
+      },
+      "visible": {
+       "xor": 43.125,
+       "overhang": 10.9375,
+       "uncovered": 32.1875,
+       "model": 782.75,
+       "observed": 804.0,
+       "iou": 0.9470818314287905,
+       "dx": -0.5,
+       "dy": 10.5,
+       "model_bottom_y": 93.62020863733449,
+       "model_top_y": 66.83043988401658,
+       "model_toe_x": 184.54031894986088
+      }
+     },
+     "size 1.10": {
+      "app_pose": {
+       "xor": 706.9375,
+       "overhang": 381.9375,
+       "uncovered": 325.0,
+       "model": 860.9375,
+       "observed": 804.0,
+       "iou": 0.40389986824769436
+      },
+      "app_pose_visible": {
+       "xor": 706.9375,
+       "overhang": 381.9375,
+       "uncovered": 325.0,
+       "model": 860.9375,
+       "observed": 804.0,
+       "iou": 0.40389986824769436
+      },
+      "full": {
+       "xor": 46.375,
+       "overhang": 35.6875,
+       "uncovered": 10.6875,
+       "model": 829.0,
+       "observed": 804.0,
+       "iou": 0.9447711202084109,
+       "dx": -1.5,
+       "dy": 10.5,
+       "model_bottom_y": 94.15611840375487,
+       "model_top_y": 66.08525907153205,
+       "model_toe_x": 184.7007394090473
+      },
+      "visible": {
+       "xor": 46.375,
+       "overhang": 35.6875,
+       "uncovered": 10.6875,
+       "model": 829.0,
+       "observed": 804.0,
+       "iou": 0.9447711202084109,
+       "dx": -1.5,
+       "dy": 10.5,
+       "model_bottom_y": 94.15611840375487,
+       "model_top_y": 66.08525907153205,
+       "model_toe_x": 184.7007394090473
+      }
+     },
+     "size 1.15": {
+      "app_pose": {
+       "xor": 731.875,
+       "overhang": 428.3125,
+       "uncovered": 303.5625,
+       "model": 928.75,
+       "observed": 804.0,
+       "iou": 0.4060962621088401
+      },
+      "app_pose_visible": {
+       "xor": 731.875,
+       "overhang": 428.3125,
+       "uncovered": 303.5625,
+       "model": 928.75,
+       "observed": 804.0,
+       "iou": 0.4060962621088401
+      },
+      "full": {
+       "xor": 71.25,
+       "overhang": 67.0,
+       "uncovered": 4.25,
+       "model": 866.75,
+       "observed": 804.0,
+       "iou": 0.9181974741676234,
+       "dx": -2.75,
+       "dy": 10.5,
+       "model_bottom_y": 94.6916988513985,
+       "model_top_y": 65.33924629507337,
+       "model_toe_x": 184.61165490869067
+      },
+      "visible": {
+       "xor": 65.0625,
+       "overhang": 52.875,
+       "uncovered": 12.1875,
+       "model": 844.6875,
+       "observed": 804.0,
+       "iou": 0.9240700218818381,
+       "dx": -2.75,
+       "dy": 11.5,
+       "model_bottom_y": 95.6916988513985,
+       "model_top_y": 66.33924629507337,
+       "model_toe_x": 184.61165490869067
+      }
+     },
+     "face -10": {
+      "app_pose": {
+       "xor": 687.8125,
+       "overhang": 318.625,
+       "uncovered": 369.1875,
+       "model": 753.4375,
+       "observed": 804.0,
+       "iou": 0.3873176706380136
+      },
+      "app_pose_visible": {
+       "xor": 687.8125,
+       "overhang": 318.625,
+       "uncovered": 369.1875,
+       "model": 753.4375,
+       "observed": 804.0,
+       "iou": 0.3873176706380136
+      },
+      "full": {
+       "xor": 81.5,
+       "overhang": 6.1875,
+       "uncovered": 75.3125,
+       "model": 734.875,
+       "observed": 804.0,
+       "iou": 0.899406001697138,
+       "dx": -1.0,
+       "dy": 10.5,
+       "model_bottom_y": 93.08389218034952,
+       "model_top_y": 67.62651839481254,
+       "model_toe_x": 182.90932158133984
+      },
+      "visible": {
+       "xor": 81.5,
+       "overhang": 6.1875,
+       "uncovered": 75.3125,
+       "model": 734.875,
+       "observed": 804.0,
+       "iou": 0.899406001697138,
+       "dx": -1.0,
+       "dy": 10.5,
+       "model_bottom_y": 93.08389218034952,
+       "model_top_y": 67.62651839481254,
+       "model_toe_x": 182.90932158133984
+      }
+     },
+     "face +10": {
+      "app_pose": {
+       "xor": 671.875,
+       "overhang": 297.4375,
+       "uncovered": 374.4375,
+       "model": 727.0,
+       "observed": 804.0,
+       "iou": 0.39000170232083076
+      },
+      "app_pose_visible": {
+       "xor": 671.875,
+       "overhang": 297.4375,
+       "uncovered": 374.4375,
+       "model": 727.0,
+       "observed": 804.0,
+       "iou": 0.39000170232083076
+      },
+      "full": {
+       "xor": 70.875,
+       "overhang": 9.0,
+       "uncovered": 61.875,
+       "model": 751.125,
+       "observed": 804.0,
+       "iou": 0.9128228782287823,
+       "dx": 1.25,
+       "dy": 10.25,
+       "model_bottom_y": 92.8340621825003,
+       "model_top_y": 67.2814933761375,
+       "model_toe_x": 184.6661463150726
+      },
+      "visible": {
+       "xor": 70.875,
+       "overhang": 9.0,
+       "uncovered": 61.875,
+       "model": 751.125,
+       "observed": 804.0,
+       "iou": 0.9128228782287823,
+       "dx": 1.25,
+       "dy": 10.25,
+       "model_bottom_y": 92.8340621825003,
+       "model_top_y": 67.2814933761375,
+       "model_toe_x": 184.6661463150726
+      }
+     },
+     "face +20": {
+      "app_pose": {
+       "xor": 663.0625,
+       "overhang": 285.0,
+       "uncovered": 378.0625,
+       "model": 710.9375,
+       "observed": 804.0,
+       "iou": 0.39112718089990817
+      },
+      "app_pose_visible": {
+       "xor": 663.0625,
+       "overhang": 285.0,
+       "uncovered": 378.0625,
+       "model": 710.9375,
+       "observed": 804.0,
+       "iou": 0.39112718089990817
+      },
+      "full": {
+       "xor": 83.5,
+       "overhang": 22.625,
+       "uncovered": 60.875,
+       "model": 765.75,
+       "observed": 804.0,
+       "iou": 0.8989868440949644,
+       "dx": 2.75,
+       "dy": 10.5,
+       "model_bottom_y": 93.0841682537943,
+       "model_top_y": 67.49803673300495,
+       "model_toe_x": 185.2441024439825
+      },
+      "visible": {
+       "xor": 83.5,
+       "overhang": 22.625,
+       "uncovered": 60.875,
+       "model": 765.75,
+       "observed": 804.0,
+       "iou": 0.8989868440949644,
+       "dx": 2.75,
+       "dy": 10.5,
+       "model_bottom_y": 93.0841682537943,
+       "model_top_y": 67.49803673300495,
+       "model_toe_x": 185.2441024439825
+      }
+     },
+     "face +30": {
+      "app_pose": {
+       "xor": 660.8125,
+       "overhang": 267.0625,
+       "uncovered": 393.75,
+       "model": 677.3125,
+       "observed": 804.0,
+       "iou": 0.3830308688802007
+      },
+      "app_pose_visible": {
+       "xor": 660.8125,
+       "overhang": 267.0625,
+       "uncovered": 393.75,
+       "model": 677.3125,
+       "observed": 804.0,
+       "iou": 0.3830308688802007
+      },
+      "full": {
+       "xor": 98.4375,
+       "overhang": 34.375,
+       "uncovered": 64.0625,
+       "model": 774.3125,
+       "observed": 804.0,
+       "iou": 0.8825853585805874,
+       "dx": 4.75,
+       "dy": 10.75,
+       "model_bottom_y": 93.33428432493358,
+       "model_top_y": 67.7246874180705,
+       "model_toe_x": 185.85621851943688
+      },
+      "visible": {
+       "xor": 98.4375,
+       "overhang": 34.375,
+       "uncovered": 64.0625,
+       "model": 774.3125,
+       "observed": 804.0,
+       "iou": 0.8825853585805874,
+       "dx": 4.75,
+       "dy": 10.75,
+       "model_bottom_y": 93.33428432493358,
+       "model_top_y": 67.7246874180705,
+       "model_toe_x": 185.85621851943688
+      }
+     },
+     "loft -10": {
+      "app_pose": {
+       "xor": 674.4375,
+       "overhang": 331.5625,
+       "uncovered": 342.875,
+       "model": 792.6875,
+       "observed": 804.0,
+       "iou": 0.40607628378006494
+      },
+      "app_pose_visible": {
+       "xor": 674.4375,
+       "overhang": 331.5625,
+       "uncovered": 342.875,
+       "model": 792.6875,
+       "observed": 804.0,
+       "iou": 0.40607628378006494
+      },
+      "full": {
+       "xor": 33.625,
+       "overhang": 16.1875,
+       "uncovered": 17.4375,
+       "model": 802.75,
+       "observed": 804.0,
+       "iou": 0.9590032766897812,
+       "dx": 0.5,
+       "dy": 10.25,
+       "model_bottom_y": 93.87841882719479,
+       "model_top_y": 65.97781150717933,
+       "model_toe_x": 184.3900333234348
+      },
+      "visible": {
+       "xor": 33.625,
+       "overhang": 16.1875,
+       "uncovered": 17.4375,
+       "model": 802.75,
+       "observed": 804.0,
+       "iou": 0.9590032766897812,
+       "dx": 0.5,
+       "dy": 10.25,
+       "model_bottom_y": 93.87841882719479,
+       "model_top_y": 65.97781150717933,
+       "model_toe_x": 184.3900333234348
+      }
+     },
+     "loft +10": {
+      "app_pose": {
+       "xor": 664.625,
+       "overhang": 249.8125,
+       "uncovered": 414.8125,
+       "model": 639.0,
+       "observed": 804.0,
+       "iou": 0.36931380107941403
+      },
+      "app_pose_visible": {
+       "xor": 664.625,
+       "overhang": 249.8125,
+       "uncovered": 414.8125,
+       "model": 639.0,
+       "observed": 804.0,
+       "iou": 0.36931380107941403
+      },
+      "full": {
+       "xor": 157.625,
+       "overhang": 2.4375,
+       "uncovered": 155.1875,
+       "model": 651.25,
+       "observed": 804.0,
+       "iou": 0.8045415794776408,
+       "dx": 0.75,
+       "dy": 10.0,
+       "model_bottom_y": 91.21796238289792,
+       "model_top_y": 68.88029329940916,
+       "model_toe_x": 184.62816391404021
+      },
+      "visible": {
+       "xor": 157.625,
+       "overhang": 2.4375,
+       "uncovered": 155.1875,
+       "model": 651.25,
+       "observed": 804.0,
+       "iou": 0.8045415794776408,
+       "dx": 0.75,
+       "dy": 10.0,
+       "model_bottom_y": 91.21796238289792,
+       "model_top_y": 68.88029329940916,
+       "model_toe_x": 184.62816391404021
+      }
+     },
+     "loft +20": {
+      "app_pose": {
+       "xor": 658.4375,
+       "overhang": 193.0,
+       "uncovered": 465.4375,
+       "model": 531.5625,
+       "observed": 804.0,
+       "iou": 0.3395812437311936
+      },
+      "app_pose_visible": {
+       "xor": 658.4375,
+       "overhang": 193.0,
+       "uncovered": 465.4375,
+       "model": 531.5625,
+       "observed": 804.0,
+       "iou": 0.3395812437311936
+      },
+      "full": {
+       "xor": 264.875,
+       "overhang": 3.0,
+       "uncovered": 261.875,
+       "model": 545.125,
+       "observed": 804.0,
+       "iou": 0.6717781908302355,
+       "dx": 1.0,
+       "dy": 10.0,
+       "model_bottom_y": 89.57250133611082,
+       "model_top_y": 71.09078099897494,
+       "model_toe_x": 184.87676804946898
+      },
+      "visible": {
+       "xor": 264.875,
+       "overhang": 3.0,
+       "uncovered": 261.875,
+       "model": 545.125,
+       "observed": 804.0,
+       "iou": 0.6717781908302355,
+       "dx": 1.0,
+       "dy": 10.0,
+       "model_bottom_y": 89.57250133611082,
+       "model_top_y": 71.09078099897494,
+       "model_toe_x": 184.87676804946898
+      }
+     },
+     "roll -6": {
+      "app_pose": {
+       "xor": 640.8125,
+       "overhang": 279.5625,
+       "uncovered": 361.25,
+       "model": 722.3125,
+       "observed": 804.0,
+       "iou": 0.4086058718348042
+      },
+      "app_pose_visible": {
+       "xor": 640.8125,
+       "overhang": 279.5625,
+       "uncovered": 361.25,
+       "model": 722.3125,
+       "observed": 804.0,
+       "iou": 0.4086058718348042
+      },
+      "full": {
+       "xor": 80.8125,
+       "overhang": 4.125,
+       "uncovered": 76.6875,
+       "model": 731.4375,
+       "observed": 804.0,
+       "iou": 0.9,
+       "dx": 0.5,
+       "dy": 10.0,
+       "model_bottom_y": 93.28678940966583,
+       "model_top_y": 68.21467814715223,
+       "model_toe_x": 184.57156312710057
+      },
+      "visible": {
+       "xor": 80.8125,
+       "overhang": 4.125,
+       "uncovered": 76.6875,
+       "model": 731.4375,
+       "observed": 804.0,
+       "iou": 0.9,
+       "dx": 0.5,
+       "dy": 10.0,
+       "model_bottom_y": 93.28678940966583,
+       "model_top_y": 68.21467814715223,
+       "model_toe_x": 184.57156312710057
+      }
+     },
+     "roll -3": {
+      "app_pose": {
+       "xor": 656.4375,
+       "overhang": 289.0,
+       "uncovered": 367.4375,
+       "model": 725.5625,
+       "observed": 804.0,
+       "iou": 0.3994167429094236
+      },
+      "app_pose_visible": {
+       "xor": 656.4375,
+       "overhang": 289.0,
+       "uncovered": 367.4375,
+       "model": 725.5625,
+       "observed": 804.0,
+       "iou": 0.3994167429094236
+      },
+      "full": {
+       "xor": 77.625,
+       "overhang": 4.1875,
+       "uncovered": 73.4375,
+       "model": 734.75,
+       "observed": 804.0,
+       "iou": 0.9039517438713169,
+       "dx": 0.5,
+       "dy": 10.25,
+       "model_bottom_y": 93.13969178676852,
+       "model_top_y": 67.89034107641487,
+       "model_toe_x": 184.46976523569543
+      },
+      "visible": {
+       "xor": 77.625,
+       "overhang": 4.1875,
+       "uncovered": 73.4375,
+       "model": 734.75,
+       "observed": 804.0,
+       "iou": 0.9039517438713169,
+       "dx": 0.5,
+       "dy": 10.25,
+       "model_bottom_y": 93.13969178676852,
+       "model_top_y": 67.89034107641487,
+       "model_toe_x": 184.46976523569543
+      }
+     },
+     "roll +3": {
+      "app_pose": {
+       "xor": 685.625,
+       "overhang": 305.0,
+       "uncovered": 380.625,
+       "model": 728.375,
+       "observed": 804.0,
+       "iou": 0.3817628494138864
+      },
+      "app_pose_visible": {
+       "xor": 685.625,
+       "overhang": 305.0,
+       "uncovered": 380.625,
+       "model": 728.375,
+       "observed": 804.0,
+       "iou": 0.3817628494138864
+      },
+      "full": {
+       "xor": 75.5,
+       "overhang": 7.0,
+       "uncovered": 68.5,
+       "model": 742.5,
+       "observed": 804.0,
+       "iou": 0.906905055487053,
+       "dx": 0.75,
+       "dy": 10.5,
+       "model_bottom_y": 93.10618544201,
+       "model_top_y": 67.0234472296707,
+       "model_toe_x": 184.5699444235201
+      },
+      "visible": {
+       "xor": 75.5,
+       "overhang": 7.0,
+       "uncovered": 68.5,
+       "model": 742.5,
+       "observed": 804.0,
+       "iou": 0.906905055487053,
+       "dx": 0.75,
+       "dy": 10.5,
+       "model_bottom_y": 93.10618544201,
+       "model_top_y": 67.0234472296707,
+       "model_toe_x": 184.5699444235201
+      }
+     },
+     "roll +6": {
+      "app_pose": {
+       "xor": 700.75,
+       "overhang": 314.0625,
+       "uncovered": 386.6875,
+       "model": 731.375,
+       "observed": 804.0,
+       "iou": 0.37324612890603165
+      },
+      "app_pose_visible": {
+       "xor": 700.75,
+       "overhang": 314.0625,
+       "uncovered": 386.6875,
+       "model": 731.375,
+       "observed": 804.0,
+       "iou": 0.37324612890603165
+      },
+      "full": {
+       "xor": 75.125,
+       "overhang": 10.625,
+       "uncovered": 64.5,
+       "model": 750.125,
+       "observed": 804.0,
+       "iou": 0.9077796532146694,
+       "dx": 1.0,
+       "dy": 10.75,
+       "model_bottom_y": 93.75414139109839,
+       "model_top_y": 66.74819003900869,
+       "model_toe_x": 184.7640848682088
+      },
+      "visible": {
+       "xor": 75.125,
+       "overhang": 10.625,
+       "uncovered": 64.5,
+       "model": 750.125,
+       "observed": 804.0,
+       "iou": 0.9077796532146694,
+       "dx": 1.0,
+       "dy": 10.75,
+       "model_bottom_y": 93.75414139109839,
+       "model_top_y": 66.74819003900869,
+       "model_toe_x": 184.7640848682088
+      }
+     }
+    },
+    "depth_mm": 1924.055419698551
+   },
+   "IN-AIR f43 floor 5": {
+    "obs": {
+     "x_cut": 150.95908978709667,
+     "toe_x": 185.5,
+     "top_y": 64.5,
+     "bottom_y": 95.5
+    },
+    "line": [
+     104.39200509513265,
+     0.5008282060736299,
+     0.13434808081823765,
+     59
+    ],
+    "table": {
+     "supplied": {
+      "app_pose": {
+       "xor": 726.75,
+       "overhang": 294.375,
+       "uncovered": 432.375,
+       "model": 744.0,
+       "observed": 882.0,
+       "iou": 0.3822123047497609
+      },
+      "app_pose_visible": {
+       "xor": 726.75,
+       "overhang": 294.375,
+       "uncovered": 432.375,
+       "model": 744.0,
+       "observed": 882.0,
+       "iou": 0.3822123047497609
+      },
+      "full": {
+       "xor": 123.1875,
+       "overhang": 3.875,
+       "uncovered": 119.3125,
+       "model": 766.5625,
+       "observed": 882.0,
+       "iou": 0.860942570904473,
+       "dx": 1.25,
+       "dy": 11.25,
+       "model_bottom_y": 93.83396924830564,
+       "model_top_y": 68.32479012347834,
+       "model_toe_x": 185.13039321455437
+      },
+      "visible": {
+       "xor": 123.1875,
+       "overhang": 3.875,
+       "uncovered": 119.3125,
+       "model": 766.5625,
+       "observed": 882.0,
+       "iou": 0.860942570904473,
+       "dx": 1.25,
+       "dy": 11.25,
+       "model_bottom_y": 93.83396924830564,
+       "model_top_y": 68.32479012347834,
+       "model_toe_x": 185.13039321455437
+      }
+     }
+    },
+    "depth_mm": 1924.055419698551
+   },
+   "IN-AIR f43 floor 12": {
+    "obs": {
+     "x_cut": 155.29531824959452,
+     "toe_x": 184.5,
+     "top_y": 65.5,
+     "bottom_y": 94.5
+    },
+    "line": [
+     104.36748274567148,
+     0.5019869888706484,
+     0.15165208985402326,
+     59
+    ],
+    "table": {
+     "supplied": {
+      "app_pose": {
+       "xor": 551.75,
+       "overhang": 274.4375,
+       "uncovered": 277.3125,
+       "model": 647.125,
+       "observed": 650.0,
+       "iou": 0.403150564532486
+      },
+      "app_pose_visible": {
+       "xor": 551.75,
+       "overhang": 274.4375,
+       "uncovered": 277.3125,
+       "model": 647.125,
+       "observed": 650.0,
+       "iou": 0.403150564532486
+      },
+      "full": {
+       "xor": 66.375,
+       "overhang": 34.3125,
+       "uncovered": 32.0625,
+       "model": 652.25,
+       "observed": 650.0,
+       "iou": 0.9030048406247145,
+       "dx": 0.25,
+       "dy": 9.5,
+       "model_bottom_y": 92.08396924830564,
+       "model_top_y": 66.57479012347834,
+       "model_toe_x": 184.13039321455437
+      },
+      "visible": {
+       "xor": 66.375,
+       "overhang": 34.3125,
+       "uncovered": 32.0625,
+       "model": 652.25,
+       "observed": 650.0,
+       "iou": 0.9030048406247145,
+       "dx": 0.25,
+       "dy": 9.5,
+       "model_bottom_y": 92.08396924830564,
+       "model_top_y": 66.57479012347834,
+       "model_toe_x": 184.13039321455437
+      }
+     }
+    },
+    "depth_mm": 1924.055419698551
+   },
+   "NEAR f44 floor 8": {
+    "obs": {
+     "x_cut": 148.60250310241832,
+     "toe_x": 188.5,
+     "top_y": 63.5,
+     "bottom_y": 94.5
+    },
+    "line": [
+     102.71110181865873,
+     0.5017786325001204,
+     0.13383375514235868,
+     62
+    ],
+    "table": {
+     "supplied": {
+      "app_pose": {
+       "xor": 497.8125,
+       "overhang": 121.0625,
+       "uncovered": 376.75,
+       "model": 751.3125,
+       "observed": 1007.0,
+       "iou": 0.5587013130921381
+      },
+      "app_pose_visible": {
+       "xor": 497.8125,
+       "overhang": 121.0625,
+       "uncovered": 376.75,
+       "model": 751.3125,
+       "observed": 1007.0,
+       "iou": 0.5587013130921381
+      },
+      "full": {
+       "xor": 264.625,
+       "overhang": 20.9375,
+       "uncovered": 243.6875,
+       "model": 784.25,
+       "observed": 1007.0,
+       "iou": 0.7425670335015504,
+       "dx": 2.5,
+       "dy": 7.25,
+       "model_bottom_y": 92.27047668410867,
+       "model_top_y": 68.40293311355956,
+       "model_toe_x": 188.51732884754458
+      },
+      "visible": {
+       "xor": 264.625,
+       "overhang": 20.9375,
+       "uncovered": 243.6875,
+       "model": 784.25,
+       "observed": 1007.0,
+       "iou": 0.7425670335015504,
+       "dx": 2.5,
+       "dy": 7.25,
+       "model_bottom_y": 92.27047668410867,
+       "model_top_y": 68.40293311355956,
+       "model_toe_x": 188.51732884754458
+      }
+     },
+     "size 0.85": {
+      "app_pose": {
+       "xor": 558.6875,
+       "overhang": 61.5,
+       "uncovered": 497.1875,
+       "model": 571.3125,
+       "observed": 1007.0,
+       "iou": 0.4771291530182499
+      },
+      "app_pose_visible": {
+       "xor": 558.6875,
+       "overhang": 61.5,
+       "uncovered": 497.1875,
+       "model": 571.3125,
+       "observed": 1007.0,
+       "iou": 0.4771291530182499
+      },
+      "full": {
+       "xor": 405.0625,
+       "overhang": 11.3125,
+       "uncovered": 393.75,
+       "model": 624.5625,
+       "observed": 1007.0,
+       "iou": 0.6022218130485485,
+       "dx": 5.5,
+       "dy": 8.25,
+       "model_bottom_y": 91.76149822252826,
+       "model_top_y": 71.48493679282288,
+       "model_toe_x": 188.25620928705717
+      },
+      "visible": {
+       "xor": 405.0625,
+       "overhang": 11.3125,
+       "uncovered": 393.75,
+       "model": 624.5625,
+       "observed": 1007.0,
+       "iou": 0.6022218130485485,
+       "dx": 5.5,
+       "dy": 8.25,
+       "model_bottom_y": 91.76149822252826,
+       "model_top_y": 71.48493679282288,
+       "model_toe_x": 188.25620928705717
+      }
+     },
+     "size 0.90": {
+      "app_pose": {
+       "xor": 533.25,
+       "overhang": 77.5625,
+       "uncovered": 455.6875,
+       "model": 628.875,
+       "observed": 1007.0,
+       "iou": 0.5083270904166427
+      },
+      "app_pose_visible": {
+       "xor": 533.25,
+       "overhang": 77.5625,
+       "uncovered": 455.6875,
+       "model": 628.875,
+       "observed": 1007.0,
+       "iou": 0.5083270904166427
+      },
+      "full": {
+       "xor": 352.1875,
+       "overhang": 10.75,
+       "uncovered": 341.4375,
+       "model": 676.3125,
+       "observed": 1007.0,
+       "iou": 0.653954802259887,
+       "dx": 4.5,
+       "dy": 8.0,
+       "model_bottom_y": 92.01478147095828,
+       "model_top_y": 70.54165976343617,
+       "model_toe_x": 188.3427055628133
+      },
+      "visible": {
+       "xor": 352.1875,
+       "overhang": 10.75,
+       "uncovered": 341.4375,
+       "model": 676.3125,
+       "observed": 1007.0,
+       "iou": 0.653954802259887,
+       "dx": 4.5,
+       "dy": 8.0,
+       "model_bottom_y": 92.01478147095828,
+       "model_top_y": 70.54165976343617,
+       "model_toe_x": 188.3427055628133
+      }
+     },
+     "size 0.95": {
+      "app_pose": {
+       "xor": 510.9375,
+       "overhang": 96.875,
+       "uncovered": 414.0625,
+       "model": 689.8125,
+       "observed": 1007.0,
+       "iou": 0.5371418865360661
+      },
+      "app_pose_visible": {
+       "xor": 510.9375,
+       "overhang": 96.875,
+       "uncovered": 414.0625,
+       "model": 689.8125,
+       "observed": 1007.0,
+       "iou": 0.5371418865360661
+      },
+      "full": {
+       "xor": 306.125,
+       "overhang": 15.0625,
+       "uncovered": 291.0625,
+       "model": 731.0,
+       "observed": 1007.0,
+       "iou": 0.7004830917874396,
+       "dx": 3.5,
+       "dy": 7.5,
+       "model_bottom_y": 92.01777420766281,
+       "model_top_y": 69.34765891506564,
+       "model_toe_x": 188.4297999329614
+      },
+      "visible": {
+       "xor": 306.125,
+       "overhang": 15.0625,
+       "uncovered": 291.0625,
+       "model": 731.0,
+       "observed": 1007.0,
+       "iou": 0.7004830917874396,
+       "dx": 3.5,
+       "dy": 7.5,
+       "model_bottom_y": 92.01777420766281,
+       "model_top_y": 69.34765891506564,
+       "model_toe_x": 188.4297999329614
+      }
+     },
+     "size 1.05": {
+      "app_pose": {
+       "xor": 487.75,
+       "overhang": 148.75,
+       "uncovered": 339.0,
+       "model": 816.75,
+       "observed": 1007.0,
+       "iou": 0.5779796668829764
+      },
+      "app_pose_visible": {
+       "xor": 487.75,
+       "overhang": 148.75,
+       "uncovered": 339.0,
+       "model": 816.75,
+       "observed": 1007.0,
+       "iou": 0.5779796668829764
+      },
+      "full": {
+       "xor": 223.75,
+       "overhang": 27.625,
+       "uncovered": 196.125,
+       "model": 838.5,
+       "observed": 1007.0,
+       "iou": 0.7837380693487979,
+       "dx": 1.5,
+       "dy": 6.75,
+       "model_bottom_y": 92.27288915147264,
+       "model_top_y": 67.20748122239549,
+       "model_toe_x": 188.60529256716566
+      },
+      "visible": {
+       "xor": 223.75,
+       "overhang": 27.625,
+       "uncovered": 196.125,
+       "model": 838.5,
+       "observed": 1007.0,
+       "iou": 0.7837380693487979,
+       "dx": 1.5,
+       "dy": 6.75,
+       "model_bottom_y": 92.27288915147264,
+       "model_top_y": 67.20748122239549,
+       "model_toe_x": 188.60529256716566
+      }
+     },
+     "size 1.10": {
+      "app_pose": {
+       "xor": 482.75,
+       "overhang": 179.5625,
+       "uncovered": 303.1875,
+       "model": 883.375,
+       "observed": 1007.0,
+       "iou": 0.5931524888069528
+      },
+      "app_pose_visible": {
+       "xor": 482.75,
+       "overhang": 179.5625,
+       "uncovered": 303.1875,
+       "model": 883.375,
+       "observed": 1007.0,
+       "iou": 0.5931524888069528
+      },
+      "full": {
+       "xor": 186.375,
+       "overhang": 35.375,
+       "uncovered": 151.0,
+       "model": 891.375,
+       "observed": 1007.0,
+       "iou": 0.8212015829236119,
+       "dx": 0.5,
+       "dy": 6.25,
+       "model_bottom_y": 92.27501186064171,
+       "model_top_y": 66.01130210267408,
+       "model_toe_x": 188.69369135263602
+      },
+      "visible": {
+       "xor": 186.375,
+       "overhang": 35.375,
+       "uncovered": 151.0,
+       "model": 891.375,
+       "observed": 1007.0,
+       "iou": 0.8212015829236119,
+       "dx": 0.5,
+       "dy": 6.25,
+       "model_bottom_y": 92.27501186064171,
+       "model_top_y": 66.01130210267408,
+       "model_toe_x": 188.69369135263602
+      }
+     },
+     "size 1.15": {
+      "app_pose": {
+       "xor": 495.25,
+       "overhang": 221.0,
+       "uncovered": 274.25,
+       "model": 953.75,
+       "observed": 1007.0,
+       "iou": 0.5967019543973942
+      },
+      "app_pose_visible": {
+       "xor": 495.25,
+       "overhang": 221.0,
+       "uncovered": 274.25,
+       "model": 953.75,
+       "observed": 1007.0,
+       "iou": 0.5967019543973942
+      },
+      "full": {
+       "xor": 148.6875,
+       "overhang": 43.375,
+       "uncovered": 105.3125,
+       "model": 945.0625,
+       "observed": 1007.0,
+       "iou": 0.8584434130667619,
+       "dx": -0.5,
+       "dy": 6.0,
+       "model_bottom_y": 92.52684506221358,
+       "model_top_y": 65.06439461311288,
+       "model_toe_x": 188.78252546497552
+      },
+      "visible": {
+       "xor": 148.6875,
+       "overhang": 43.375,
+       "uncovered": 105.3125,
+       "model": 945.0625,
+       "observed": 1007.0,
+       "iou": 0.8584434130667619,
+       "dx": -0.5,
+       "dy": 6.0,
+       "model_bottom_y": 92.52684506221358,
+       "model_top_y": 65.06439461311288,
+       "model_toe_x": 188.78252546497552
+      }
+     },
+     "face -10": {
+      "app_pose": {
+       "xor": 486.0,
+       "overhang": 126.625,
+       "uncovered": 359.375,
+       "model": 774.25,
+       "observed": 1007.0,
+       "iou": 0.5712868011908699
+      },
+      "app_pose_visible": {
+       "xor": 486.0,
+       "overhang": 126.625,
+       "uncovered": 359.375,
+       "model": 774.25,
+       "observed": 1007.0,
+       "iou": 0.5712868011908699
+      },
+      "full": {
+       "xor": 259.625,
+       "overhang": 21.6875,
+       "uncovered": 237.9375,
+       "model": 790.75,
+       "observed": 1007.0,
+       "iou": 0.7476152864694088,
+       "dx": 1.25,
+       "dy": 7.25,
+       "model_bottom_y": 92.26830617589312,
+       "model_top_y": 68.44364215659861,
+       "model_toe_x": 187.28922379495526
+      },
+      "visible": {
+       "xor": 259.625,
+       "overhang": 21.6875,
+       "uncovered": 237.9375,
+       "model": 790.75,
+       "observed": 1007.0,
+       "iou": 0.7476152864694088,
+       "dx": 1.25,
+       "dy": 7.25,
+       "model_bottom_y": 92.26830617589312,
+       "model_top_y": 68.44364215659861,
+       "model_toe_x": 187.28922379495526
+      }
+     },
+     "face +10": {
+      "app_pose": {
+       "xor": 516.75,
+       "overhang": 132.5,
+       "uncovered": 384.25,
+       "model": 755.25,
+       "observed": 1007.0,
+       "iou": 0.5465116279069767
+      },
+      "app_pose_visible": {
+       "xor": 516.75,
+       "overhang": 132.5,
+       "uncovered": 384.25,
+       "model": 755.25,
+       "observed": 1007.0,
+       "iou": 0.5465116279069767
+      },
+      "full": {
+       "xor": 257.8125,
+       "overhang": 23.375,
+       "uncovered": 234.4375,
+       "model": 795.9375,
+       "observed": 1007.0,
+       "iou": 0.7497876986534029,
+       "dx": 3.0,
+       "dy": 7.0,
+       "model_bottom_y": 92.02322328260819,
+       "model_top_y": 68.11886749572682,
+       "model_toe_x": 188.5861784861028
+      },
+      "visible": {
+       "xor": 257.8125,
+       "overhang": 23.375,
+       "uncovered": 234.4375,
+       "model": 795.9375,
+       "observed": 1007.0,
+       "iou": 0.7497876986534029,
+       "dx": 3.0,
+       "dy": 7.0,
+       "model_bottom_y": 92.02322328260819,
+       "model_top_y": 68.11886749572682,
+       "model_toe_x": 188.5861784861028
+      }
+     },
+     "face +20": {
+      "app_pose": {
+       "xor": 550.5625,
+       "overhang": 145.875,
+       "uncovered": 404.6875,
+       "model": 748.1875,
+       "observed": 1007.0,
+       "iou": 0.5224438902743143
+      },
+      "app_pose_visible": {
+       "xor": 550.5625,
+       "overhang": 145.875,
+       "uncovered": 404.6875,
+       "model": 748.1875,
+       "observed": 1007.0,
+       "iou": 0.5224438902743143
+      },
+      "full": {
+       "xor": 256.75,
+       "overhang": 26.0,
+       "uncovered": 230.75,
+       "model": 802.25,
+       "observed": 1007.0,
+       "iou": 0.7514520813165537,
+       "dx": 4.0,
+       "dy": 7.0,
+       "model_bottom_y": 92.02653458960755,
+       "model_top_y": 68.09254900132422,
+       "model_toe_x": 188.72711673343582
+      },
+      "visible": {
+       "xor": 256.75,
+       "overhang": 26.0,
+       "uncovered": 230.75,
+       "model": 802.25,
+       "observed": 1007.0,
+       "iou": 0.7514520813165537,
+       "dx": 4.0,
+       "dy": 7.0,
+       "model_bottom_y": 92.02653458960755,
+       "model_top_y": 68.09254900132422,
+       "model_toe_x": 188.72711673343582
+      }
+     },
+     "face +30": {
+      "app_pose": {
+       "xor": 594.5625,
+       "overhang": 155.9375,
+       "uncovered": 438.625,
+       "model": 724.3125,
+       "observed": 1007.0,
+       "iou": 0.4887407964744451
+      },
+      "app_pose_visible": {
+       "xor": 594.5625,
+       "overhang": 155.9375,
+       "uncovered": 438.625,
+       "model": 724.3125,
+       "observed": 1007.0,
+       "iou": 0.4887407964744451
+      },
+      "full": {
+       "xor": 265.8125,
+       "overhang": 27.8125,
+       "uncovered": 238.0,
+       "model": 796.8125,
+       "observed": 1007.0,
+       "iou": 0.7431297940448148,
+       "dx": 5.5,
+       "dy": 6.5,
+       "model_bottom_y": 91.5300993323276,
+       "model_top_y": 67.57483726649204,
+       "model_toe_x": 188.93117174840492
+      },
+      "visible": {
+       "xor": 265.8125,
+       "overhang": 27.8125,
+       "uncovered": 238.0,
+       "model": 796.8125,
+       "observed": 1007.0,
+       "iou": 0.7431297940448148,
+       "dx": 5.5,
+       "dy": 6.5,
+       "model_bottom_y": 91.5300993323276,
+       "model_top_y": 67.57483726649204,
+       "model_toe_x": 188.93117174840492
+      }
+     },
+     "loft -10": {
+      "app_pose": {
+       "xor": 497.1875,
+       "overhang": 155.625,
+       "uncovered": 341.5625,
+       "model": 821.0625,
+       "observed": 1007.0,
+       "iou": 0.5723578109880658
+      },
+      "app_pose_visible": {
+       "xor": 497.1875,
+       "overhang": 155.625,
+       "uncovered": 341.5625,
+       "model": 821.0625,
+       "observed": 1007.0,
+       "iou": 0.5723578109880658
+      },
+      "full": {
+       "xor": 204.75,
+       "overhang": 27.375,
+       "uncovered": 177.375,
+       "model": 857.0,
+       "observed": 1007.0,
+       "iou": 0.8020543806646526,
+       "dx": 2.5,
+       "dy": 6.25,
+       "model_bottom_y": 92.25473175827014,
+       "model_top_y": 66.13023216106973,
+       "model_toe_x": 188.52587541547368
+      },
+      "visible": {
+       "xor": 204.75,
+       "overhang": 27.375,
+       "uncovered": 177.375,
+       "model": 857.0,
+       "observed": 1007.0,
+       "iou": 0.8020543806646526,
+       "dx": 2.5,
+       "dy": 6.25,
+       "model_bottom_y": 92.25473175827014,
+       "model_top_y": 66.13023216106973,
+       "model_toe_x": 188.52587541547368
+      }
+     },
+     "loft +10": {
+      "app_pose": {
+       "xor": 507.4375,
+       "overhang": 80.4375,
+       "uncovered": 427.0,
+       "model": 660.4375,
+       "observed": 1007.0,
+       "iou": 0.533363986436002
+      },
+      "app_pose_visible": {
+       "xor": 507.4375,
+       "overhang": 80.4375,
+       "uncovered": 427.0,
+       "model": 660.4375,
+       "observed": 1007.0,
+       "iou": 0.533363986436002
+      },
+      "full": {
+       "xor": 343.1875,
+       "overhang": 12.75,
+       "uncovered": 330.4375,
+       "model": 689.3125,
+       "observed": 1007.0,
+       "iou": 0.6634591811718559,
+       "dx": 2.5,
+       "dy": 8.25,
+       "model_bottom_y": 91.98476892715915,
+       "model_top_y": 71.10386396097964,
+       "model_toe_x": 188.51391070383974
+      },
+      "visible": {
+       "xor": 343.1875,
+       "overhang": 12.75,
+       "uncovered": 330.4375,
+       "model": 689.3125,
+       "observed": 1007.0,
+       "iou": 0.6634591811718559,
+       "dx": 2.5,
+       "dy": 8.25,
+       "model_bottom_y": 91.98476892715915,
+       "model_top_y": 71.10386396097964,
+       "model_toe_x": 188.51391070383974
+      }
+     },
+     "loft +20": {
+      "app_pose": {
+       "xor": 570.5,
+       "overhang": 57.5,
+       "uncovered": 513.0,
+       "model": 551.5,
+       "observed": 1007.0,
+       "iou": 0.46406763738844525
+      },
+      "app_pose_visible": {
+       "xor": 570.5,
+       "overhang": 57.5,
+       "uncovered": 513.0,
+       "model": 551.5,
+       "observed": 1007.0,
+       "iou": 0.46406763738844525
+      },
+      "full": {
+       "xor": 439.1875,
+       "overhang": 3.875,
+       "uncovered": 435.3125,
+       "model": 575.5625,
+       "observed": 1007.0,
+       "iou": 0.5655372820576233,
+       "dx": 2.5,
+       "dy": 9.25,
+       "model_bottom_y": 91.43719615093889,
+       "model_top_y": 74.18248256367005,
+       "model_toe_x": 188.5126731082119
+      },
+      "visible": {
+       "xor": 439.1875,
+       "overhang": 3.875,
+       "uncovered": 435.3125,
+       "model": 575.5625,
+       "observed": 1007.0,
+       "iou": 0.5655372820576233,
+       "dx": 2.5,
+       "dy": 9.25,
+       "model_bottom_y": 91.43719615093889,
+       "model_top_y": 74.18248256367005,
+       "model_toe_x": 188.5126731082119
+      }
+     },
+     "roll -6": {
+      "app_pose": {
+       "xor": 482.875,
+       "overhang": 112.5625,
+       "uncovered": 370.3125,
+       "model": 749.25,
+       "observed": 1007.0,
+       "iou": 0.5686931278959415
+      },
+      "app_pose_visible": {
+       "xor": 482.875,
+       "overhang": 112.5625,
+       "uncovered": 370.3125,
+       "model": 749.25,
+       "observed": 1007.0,
+       "iou": 0.5686931278959415
+      },
+      "full": {
+       "xor": 289.75,
+       "overhang": 31.1875,
+       "uncovered": 258.5625,
+       "model": 779.625,
+       "observed": 1007.0,
+       "iou": 0.7209078321594125,
+       "dx": 2.25,
+       "dy": 6.25,
+       "model_bottom_y": 91.93037910329313,
+       "model_top_y": 68.46906596179035,
+       "model_toe_x": 188.44677055245046
+      },
+      "visible": {
+       "xor": 289.75,
+       "overhang": 31.1875,
+       "uncovered": 258.5625,
+       "model": 779.625,
+       "observed": 1007.0,
+       "iou": 0.7209078321594125,
+       "dx": 2.25,
+       "dy": 6.25,
+       "model_bottom_y": 91.93037910329313,
+       "model_top_y": 68.46906596179035,
+       "model_toe_x": 188.44677055245046
+      }
+     },
+     "roll -3": {
+      "app_pose": {
+       "xor": 491.4375,
+       "overhang": 116.6875,
+       "uncovered": 374.75,
+       "model": 748.9375,
+       "observed": 1007.0,
+       "iou": 0.5626564325045886
+      },
+      "app_pose_visible": {
+       "xor": 491.4375,
+       "overhang": 116.6875,
+       "uncovered": 374.75,
+       "model": 748.9375,
+       "observed": 1007.0,
+       "iou": 0.5626564325045886
+      },
+      "full": {
+       "xor": 278.0625,
+       "overhang": 26.625,
+       "uncovered": 251.4375,
+       "model": 782.1875,
+       "observed": 1007.0,
+       "iou": 0.7309831902285645,
+       "dx": 2.5,
+       "dy": 6.75,
+       "model_bottom_y": 92.05806190760724,
+       "model_top_y": 68.43210935323167,
+       "model_toe_x": 188.60123495907936
+      },
+      "visible": {
+       "xor": 278.0625,
+       "overhang": 26.625,
+       "uncovered": 251.4375,
+       "model": 782.1875,
+       "observed": 1007.0,
+       "iou": 0.7309831902285645,
+       "dx": 2.5,
+       "dy": 6.75,
+       "model_bottom_y": 92.05806190760724,
+       "model_top_y": 68.43210935323167,
+       "model_toe_x": 188.60123495907936
+      }
+     },
+     "roll +3": {
+      "app_pose": {
+       "xor": 506.875,
+       "overhang": 126.9375,
+       "uncovered": 379.9375,
+       "model": 754.0,
+       "observed": 1007.0,
+       "iou": 0.5529956457035772
+      },
+      "app_pose_visible": {
+       "xor": 506.875,
+       "overhang": 126.9375,
+       "uncovered": 379.9375,
+       "model": 754.0,
+       "observed": 1007.0,
+       "iou": 0.5529956457035772
+      },
+      "full": {
+       "xor": 250.3125,
+       "overhang": 16.4375,
+       "uncovered": 233.875,
+       "model": 789.5625,
+       "observed": 1007.0,
+       "iou": 0.7554198473282443,
+       "dx": 2.75,
+       "dy": 7.5,
+       "model_bottom_y": 92.53740538203515,
+       "model_top_y": 68.13747053203585,
+       "model_toe_x": 188.70935660326083
+      },
+      "visible": {
+       "xor": 250.3125,
+       "overhang": 16.4375,
+       "uncovered": 233.875,
+       "model": 789.5625,
+       "observed": 1007.0,
+       "iou": 0.7554198473282443,
+       "dx": 2.75,
+       "dy": 7.5,
+       "model_bottom_y": 92.53740538203515,
+       "model_top_y": 68.13747053203585,
+       "model_toe_x": 188.70935660326083
+      }
+     },
+     "roll +6": {
+      "app_pose": {
+       "xor": 512.9375,
+       "overhang": 131.3125,
+       "uncovered": 381.625,
+       "model": 756.6875,
+       "observed": 1007.0,
+       "iou": 0.5493877999231318
+      },
+      "app_pose_visible": {
+       "xor": 512.9375,
+       "overhang": 131.3125,
+       "uncovered": 381.625,
+       "model": 756.6875,
+       "observed": 1007.0,
+       "iou": 0.5493877999231318
+      },
+      "full": {
+       "xor": 236.9375,
+       "overhang": 11.0,
+       "uncovered": 225.9375,
+       "model": 792.0625,
+       "observed": 1007.0,
+       "iou": 0.7672519646365422,
+       "dx": 2.75,
+       "dy": 7.5,
+       "model_bottom_y": 92.90890634338875,
+       "model_top_y": 67.64639163657341,
+       "model_toe_x": 188.65708826411498
+      },
+      "visible": {
+       "xor": 236.9375,
+       "overhang": 11.0,
+       "uncovered": 225.9375,
+       "model": 792.0625,
+       "observed": 1007.0,
+       "iou": 0.7672519646365422,
+       "dx": 2.75,
+       "dy": 7.5,
+       "model_bottom_y": 92.90890634338875,
+       "model_top_y": 67.64639163657341,
+       "model_toe_x": 188.65708826411498
+      }
+     }
+    },
+    "depth_mm": 2051.5545764248095
+   },
+   "NEAR f44 floor 5": {
+    "obs": {
+     "x_cut": 148.85339241866836,
+     "toe_x": 193.5,
+     "top_y": 62.5,
+     "bottom_y": 95.5
+    },
+    "line": [
+     102.71110181865873,
+     0.5017786325001204,
+     0.13383375514235868,
+     62
+    ],
+    "table": {
+     "supplied": {
+      "app_pose": {
+       "xor": 536.6875,
+       "overhang": 69.0,
+       "uncovered": 467.6875,
+       "model": 751.3125,
+       "observed": 1150.0,
+       "iou": 0.5597313371616078
+      },
+      "app_pose_visible": {
+       "xor": 536.6875,
+       "overhang": 69.0,
+       "uncovered": 467.6875,
+       "model": 751.3125,
+       "observed": 1150.0,
+       "iou": 0.5597313371616078
+      },
+      "full": {
+       "xor": 344.9375,
+       "overhang": 10.0625,
+       "uncovered": 334.875,
+       "model": 825.1875,
+       "observed": 1150.0,
+       "iou": 0.7026561068907925,
+       "dx": 6.0,
+       "dy": 7.0,
+       "model_bottom_y": 92.02047668410867,
+       "model_top_y": 68.15293311355956,
+       "model_toe_x": 192.01732884754458
+      },
+      "visible": {
+       "xor": 344.9375,
+       "overhang": 10.0625,
+       "uncovered": 334.875,
+       "model": 825.1875,
+       "observed": 1150.0,
+       "iou": 0.7026561068907925,
+       "dx": 6.0,
+       "dy": 7.0,
+       "model_bottom_y": 92.02047668410867,
+       "model_top_y": 68.15293311355956,
+       "model_toe_x": 192.01732884754458
+      }
+     }
+    },
+    "depth_mm": 2051.5545764248095
+   },
+   "NEAR f44 floor 12": {
+    "obs": {
+     "x_cut": 148.82358902983736,
+     "toe_x": 188.5,
+     "top_y": 64.5,
+     "bottom_y": 93.5
+    },
+    "line": [
+     102.72125828077426,
+     0.5012791343632889,
+     0.1389412868142227,
+     63
+    ],
+    "table": {
+     "supplied": {
+      "app_pose": {
+       "xor": 524.4375,
+       "overhang": 184.375,
+       "uncovered": 340.0625,
+       "model": 751.3125,
+       "observed": 907.0,
+       "iou": 0.5194708509907228
+      },
+      "app_pose_visible": {
+       "xor": 524.4375,
+       "overhang": 184.375,
+       "uncovered": 340.0625,
+       "model": 751.3125,
+       "observed": 907.0,
+       "iou": 0.5194708509907228
+      },
+      "full": {
+       "xor": 201.125,
+       "overhang": 39.1875,
+       "uncovered": 161.9375,
+       "model": 784.25,
+       "observed": 907.0,
+       "iou": 0.7874364224849726,
+       "dx": 2.5,
+       "dy": 7.75,
+       "model_bottom_y": 92.77047668410867,
+       "model_top_y": 68.90293311355956,
+       "model_toe_x": 188.51732884754458
+      },
+      "visible": {
+       "xor": 201.125,
+       "overhang": 39.1875,
+       "uncovered": 161.9375,
+       "model": 784.25,
+       "observed": 907.0,
+       "iou": 0.7874364224849726,
+       "dx": 2.5,
+       "dy": 7.75,
+       "model_bottom_y": 92.77047668410867,
+       "model_top_y": 68.90293311355956,
+       "model_toe_x": 188.51732884754458
+      }
+     }
+    },
+    "depth_mm": 2051.5545764248095
+   }
+  }
+ }
+}

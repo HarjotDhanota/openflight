@@ -1,0 +1,33 @@
+SHOT 1   mark 12.3 / 23.9 | rest frame 43: toe points 5 (furthest x 162.4), top-edge points 19, lowest visible row 114.5
+   rim: its own upper edge found on 18 of the columns; median thickness 3.14 px = 5.4 mm at this depth
+   V1 hosel + top                     face  +1.4 (supplied +1.4) | fit rms px: shaft 0.07, top 1.08, toe  -   | reading 14.4 / 23.5 (miss +2.1 / -0.4)
+   V2 hosel + top + toe               face  +1.4 (supplied +1.4) | fit rms px: shaft 0.45, top 2.01, toe 5.41 | reading 13.5 / 22.0 (miss +1.2 / -1.9)
+   V3 hosel + top + toe, turn free    face -42.2 (supplied +1.4) | fit rms px: shaft 0.28, top 1.34, toe 1.14 | reading -17.3 / 24.5 (miss -29.6 / +0.7)
+   V3b                                contact point by the supplied face normal, read on that placement    | reading 0.3 / 23.5 (miss -12.0 / -0.4)
+
+SHOT 2   mark 43.3 / 12.4 | rest frame 42: toe points 7 (furthest x 190.2), top-edge points 23, lowest visible row 108.5
+   rim: its own upper edge found on 22 of the columns; median thickness 3.17 px = 6.0 mm at this depth
+   V1 hosel + top                     face  +5.6 (supplied +5.6) | fit rms px: shaft 0.26, top 0.97, toe  -   | reading 44.4 / 17.9 (miss +1.1 / +5.5)
+   V2 hosel + top + toe               face  +5.6 (supplied +5.6) | fit rms px: shaft 0.98, top 0.92, toe 3.66 | reading 43.9 / 17.7 (miss +0.5 / +5.4)
+   V3 hosel + top + toe, turn free    face +16.0 (supplied +5.6) | fit rms px: shaft 0.54, top 0.89, toe 2.81 | reading 44.8 / 18.9 (miss +1.5 / +6.6)
+   V3b                                contact point by the supplied face normal, read on that placement    | reading 41.3 / 19.0 (miss -2.1 / +6.6)
+
+SHOT 3   mark 43.5 / 30.3 | rest frame 43: toe points 10 (furthest x 187.4), top-edge points 6, lowest visible row 113.5
+   rim: its own upper edge found on 6 of the columns; median thickness 6.00 px = 13.1 mm at this depth
+   V1 hosel + top                     face  +4.9 (supplied +4.9) | fit rms px: shaft 0.63, top 1.12, toe  -   | reading 38.0 / 25.4 (miss -5.5 / -5.0)
+   V2 hosel + top + toe               face  +4.9 (supplied +4.9) | fit rms px: shaft 1.11, top 1.35, toe 2.12 | reading 35.3 / 21.2 (miss -8.2 / -9.1)
+   V3 hosel + top + toe, turn free    face +11.6 (supplied +4.9) | fit rms px: shaft 0.21, top 1.26, toe 2.11 | reading 36.3 / 20.9 (miss -7.2 / -9.4)
+   V3b                                contact point by the supplied face normal, read on that placement    | reading 34.0 / 20.9 (miss -9.5 / -9.5)
+
+SHOT 4   mark 66.1 / 28.1 | rest frame 44: toe points 9 (furthest x 200.4), top-edge points 15, lowest visible row 113.5
+   rim: its own upper edge found on 6 of the columns; median thickness 3.50 px = 7.1 mm at this depth
+   V1 hosel + top                     face  +8.5 (supplied +8.5) | fit rms px: shaft 0.04, top 0.48, toe  -   | reading 62.9 / 26.8 (miss -3.2 / -1.3)
+   V2 hosel + top + toe               face  +8.5 (supplied +8.5) | fit rms px: shaft 0.78, top 0.96, toe 3.19 | reading 61.0 / 25.6 (miss -5.1 / -2.5)
+   V3 hosel + top + toe, turn free    face +12.0 (supplied +8.5) | fit rms px: shaft 0.49, top 1.11, toe 3.18 | reading 61.8 / 25.8 (miss -4.2 / -2.3)
+   V3b                                contact point by the supplied face normal, read on that placement    | reading 60.7 / 25.8 (miss -5.4 / -2.2)
+
+RULE (written before running): one variant, the same for all four, within 4 mm heel-toe and 4 mm in height on every shot.
+   V1   misses (heel-toe / height): +2.1 / -0.4   +1.1 / +5.5   -5.5 / -5.0   -3.2 / -1.3 -> FAIL
+   V2   misses (heel-toe / height): +1.2 / -1.9   +0.5 / +5.4   -8.2 / -9.1   -5.1 / -2.5 -> FAIL
+   V3a  misses (heel-toe / height): -29.6 / +0.7   +1.5 / +6.6   -7.2 / -9.4   -4.2 / -2.3 -> FAIL
+   V3b  misses (heel-toe / height): -12.0 / -0.4   -2.1 / +6.6   -9.5 / -9.5   -5.4 / -2.2 -> FAIL

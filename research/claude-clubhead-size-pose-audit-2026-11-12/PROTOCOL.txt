@@ -1,0 +1,406 @@
+PROTOCOL - clubhead size / shape / pose audit, 12 November 2026 (Claude)
+Written before any number below was computed. Deviations are appended as addenda, never edited in.
+
+0. WHAT I HAD ALREADY SEEN WHEN I WROTE THIS
+  - The handoff, the rejected trial-comparison.png, Codex's two raw 8x enlargements.
+  - Enlarged raw prepared frames (nothing drawn): shot 1 f41-43, shot 3 f42-43, shot 4 f43-44; the pre-swing ball.
+  - The application's own outline over the last-rest frame of shots 1, 3, 4 (figures/app-overlay-*.png).
+  - The four face photos, displayed only. I saw where the marks are (shot 1 toe mid-height, shot 3 centre upper
+    third, shot 4 heel at the top edge). Nothing below is fitted to them; they are compared at the end, by eye,
+    direction only, and labelled as exhausted development data.
+  - By eye, before measuring: the model's top edge floats above the real head (about 6 px shot 1, about 17 px
+    shots 3 and 4); the club's ferrule and top edge drop about 10 px between the last two frames of shots 3 and 4
+    while the visible bottom barely moves. Those are the impressions the measurements below must confirm or kill.
+
+1. HYPOTHESES (more than one may hold)
+  G  generic dimensions or shape wrong for this club (drawing-to-mm, aspect, heel/toe/hosel proportions)
+  D  camera / depth / scale wrong
+  O  orientation or reference transform wrong (loft, face, roll; sign or frame)
+  E  observed edge identity / objective coverage wrong (what the fit calls the sole; hidden bottom)
+  R  face-plane drawing versus the rear body the camera sees
+
+2. MEASUREMENTS
+  M0 Pins, dirty states, input hashes before and after. One unmodified replay per shot at the current pin.
+  M1 Ledger: the generic outline by anatomical part in mm, with its lineage (kiosk drawing -> JSON), units,
+     x/y scale, face-centre datum, hosel foot. Checked by recomputing from the JSON and the drawing source.
+  M2 Is the supplied orientation applied? Project the outline with the supplied angles and with loft, face and
+     roll each set to zero; report the change of the projected outline in px. (Tests the owner's statement that
+     the model is not tilted at all.)
+  M3 Rigid-descent check, model-free. Per frame: the ferrule (dark gap on the shaft axis), the top of the head
+     at the toe, the lowest visible row of the head. In mm at the supplied depth and in ball diameters
+     (depth-free ruler). RULE: between two consecutive frames, if ferrule-to-toe-top changes by less than 4 mm
+     while ferrule-to-visible-bottom shrinks by more than 8 mm, the bottom is OCCLUDED on the later frame (E);
+     a size or scale error cannot do that, and a loft change would shrink both.
+  M4 Silhouette registration. Observed: |frame - pre-swing median| over max(4 sigma, floor), closed 5x7, largest
+     component, column-filled right of the hosel (floor 8 DN; 5 and 12 for sensitivity). Model: the application's
+     outline plus sole strip at the supplied orientation and depth. Cost: XOR area inside the window right of the
+     hosel. For each variant the two image translations are re-optimised (0.25 px grid, +-30 px).
+       frames  IN-AIR     the frame at least 4 ms before the application's contact (shot 1 f42, shot 3 f42, shot 4 f43)
+               NEAR       the application's last-rest frame (f43, f43, f44)
+       variants, one at a time about the supplied values:
+               size 0.85 ... 1.15 step 0.05; face +-10, +20, +30; loft -10, +10, +20; roll -6, -3, +3, +6
+       windows FULL (whole head) and VISIBLE (model clipped at the observed lowest row)
+     RULES (fixed now):
+       G/D  "size wrong" if on the IN-AIR frames, FULL window, the best size is 0.90 or less, or 1.10 or more, on at
+            least 2 of 3 shots AND improves XOR by 15 % or more over size 1.00. G and D are not separable by size
+            alone; the ball diameter in px against 42.67 mm bounds D at the ball.
+       O    an angle variant is "supported" if it improves XOR by 15 % or more in the same direction on 2 of 3 shots.
+       E    "placement, not size" if on the NEAR frames translation alone (VISIBLE window) cuts XOR by half or more
+            against the application's pose AND the registered model's bottom is then more than 5 mm below the
+            lowest visible row.
+       R    after the best single variant, XOR above 15 % of the observed area means a shape/representation
+            residual remains; say where it is.
+  M5 Shaft: observed ridge line against the model's shaft axis after M4's registration, px and mm, with the
+     in-plane hosel-foot construction examined in 3-D (deduction, then compared).
+  M6 Proposed overlay for every placed shot at native scale beside the raw frame and the application's: full
+     outline, clipped at the visible line, hidden part dashed. Overhang and uncovered areas reported for both.
+
+3. BOUNDS
+  No production change before the diagnosis is written. No hardware, no downloads, no push. Research scripts only,
+  in this folder. Originals are read-only and hashed. Four clips, one club: development data; no accuracy claim.
+
+ADDENDUM 1 (after the first run of diag.py; nothing above was edited)
+  What failed. M3's automatic "top of the head" and M4's observed silhouette on the NEAR frames of shots 3 and 4
+  (and on every after-contact frame) are NOT the head. On those frames a diffuse region brighter than the pre-swing
+  image stands above the sharp head; the resting ball is still visible through it. My extraction counted it as
+  head. M3's rule could therefore not be evaluated as written, and M4's NEAR numbers for shots 3 and 4 are
+  discarded (kept in results/DIAG.txt, marked). Shot 1's NEAR frame and all three IN-AIR frames have no such
+  region and stand.
+  Why it is not the head (the test, fixed before computing it): the club is rigid. If the top of that region were
+  the top of the head, the head's top would have risen by more than 20 mm relative to the ferrule in one frame
+  while the shaft's direction in the image changed by less than 1 degree. RULE: more than 10 mm with less than
+  2 degrees of shaft turn = not the head.
+  Replacement measurements.
+  M3b Rigid carry (carry.py). The club's OWN silhouette on the IN-AIR frame, moved to the NEAR frame by the
+      similarity fixed by the ferrule (origin), the shaft axis (rotation) and the supplied depth ratio (scale), plus
+      ONE measured number w: the toe-ward stretch from the shaft axis that puts the carried toe on the sharp toe of
+      the NEAR frame. Check, independent of the carry: the dark cavity's upper edge on the NEAR frame (strongest
+      downward darkening above the bright bar, per column), net of the same finder's offset from the silhouette top
+      on the IN-AIR frame ("rim").
+      RULE for E, restated: on a NEAR frame the application's model is "on the wrong thing" if its top is more than
+      5 px above the cavity's upper edge net of the rim AND more than 30 % of its visible area lies off the club's
+      own carried silhouette. The bottom is "out of sight" if the carried own silhouette extends more than 8 mm
+      below the lowest visible row.
+  M6 The proposed overlay is the generic model placed on the IN-AIR frame by translation only (M4) and carried by
+     the same transform; drawn solid above the lowest visible row and dashed below it.
+  M7 Illustration only (readout.py): the carried model moved to the application's contact instant by the ferrule's
+     own motion across the bracket; the ball's contact point read in face coordinates. No parameter fitted, no
+     photo read. Compared with the photographed marks by eye, direction only, AFTER the numbers were written.
+  Not done: no fit of loft, face or size on the NEAR frames; no change to any threshold after seeing a result,
+  except this addendum's replacement of the contaminated observation.
+
+ADDENDUM 9 (13 Nov 2026; written BEFORE running anything below; nothing above was edited)
+  Question. Are the D-plane step's inputs (attack angle, launch angle) wrong on shots 3 and 4, and does correcting
+  them move the impact reading toward the photographed marks?
+  Two possible flaws in MY OWN earlier numbers (results/DPLANE-CHECK.txt), found by reading before running:
+    a. ball_track_lib used the radar's ball speed as the ball's FULL speed. The OPS reads the speed along its line of
+       sight. With the image motion fixed, a too-small full speed gives a too-high launch angle.
+    b. my "club descent" was the chord between the last two frames before contact, centred about 1.8 ms before the
+       last frame. The head's direction turns on its arc, so that is not the direction at contact. The application
+       reads a quadratic tangent at its last tracked frame.
+  Also noted before running: the application's placement assumes a level camera (pitch 0 +- 1) but itself warns that
+  the resting ball then sits 89 / 104 / 97 mm above the surface instead of 21 mm; its launch and delivery code
+  instead infer the pitch from the resting ball. Angles "against the camera axis" and angles "against the horizon"
+  therefore differ by about 2 degrees, the same on every shot. Both are reported.
+  T1 Ball launch. Refit the ball track with the radar reading as the component of the ball's velocity along the line
+     from the OPS (camera frame -85, +47, -20 mm) to the ball: (i) at the tee, (ii) 6 ms after contact (sensitivity).
+     Old behaviour stays the default of ball_track_lib so earlier results reproduce. Report launch against the camera
+     axis and against the horizon (pitch inferred the application's way: lens 95 mm, ball centre 21.35 mm above the
+     same surface; also with the ball 25.4 mm higher, the owner's mat, since it is not known what the unit stands on).
+     RULE: if the refit launch against the horizon is within 2 deg of the application's camera-fallback launch on
+     shots 3 and 4, my statement that the fallback "reads 3-4 deg low" is withdrawn.
+  T2 Attack. On every frame before contact where it is found (up to 5): the ferrule (clear of the turf), the lowest
+     visible row of the head on the shaft axis, and the application's own tracked point (_clubhead_anchor run
+     read-only on the same pixels). Each to mm at the application's depth for that frame. Per point: chord of each
+     interval, and the quadratic tangent at the last frame and at mid-contact (ball-track instant).
+     RULE: "the application's attack angle is spoiled by the turf line" is supported if, on shots 3 and 4, its tracked
+     point drops at least 4 mm less than the ferrule over the last interval while agreeing within 2 mm per interval
+     before that. Otherwise not supported, and said so.
+     Attack adopted for T3: the ferrule's quadratic tangent at mid-contact when 4 or more frames carry it and the
+     fitted turn is between 0 and 3 deg/ms of levelling; otherwise the ferrule's last chord moved to contact with
+     1.3 deg/ms (32 m/s on a 1.4 m arc), and marked as such.
+  T3 D-plane rerun and reading. The application's own inversion (collision_forward.face_and_loft_from_launch,
+     imported read-only) with T2's attack and T1's launch, club path and horizontal launch as the application had
+     them. The TS4 pipeline (top-edge and shaft+ferrule placements, ball-track instant from T1) rerun with the new
+     face and loft: (i) camera level, as the application places; (ii) loft raised by the inferred pitch (sensitivity).
+     Expectation written before running: in this inversion loft moves by about -0.23 deg per degree of attack and
+     +1.2 per degree of launch, so if T1 withdraws the launch correction the loft moves by 1-4 deg, about 1-2 mm.
+     RULE: "orientation explains the fat-shot height miss" is supported only if the top-edge height miss on shots 3
+     AND 4 falls under 3 mm with shot 1 no worse by more than 1 mm. Marks are read only for this comparison.
+  T4 Spin. Shots 1 and 4 report the identical OPS spin (2252.197 rpm, confidence 0.59). Read the spin records of
+     shots 1-4: is the value a whole number of spectral bins, and do the candidates/SNR differ. No rule; reported.
+  New scripts: pipeline_lib.py (class Shot copied unchanged from pipeline.py so earlier outputs are not rewritten),
+  dplane_inputs.py (T1, T2), dplane_rerun.py (T3), spin_check.py (T4). Outputs: results/DPLANE-INPUTS.txt,
+  DPLANE-RERUN.txt, SPIN-CHECK.txt and matching json. Earlier results files are not overwritten.
+
+ADDENDUM 10 (13 Nov 2026; written BEFORE any shot 2 pixel or photo is read by this audit's measuring code)
+  Shot 2 of the same session (capture camera_20261027_170845_065_003, face photo shot-0002.pgm) was never placed by
+  the application ("the contact estimates disagree") and never analysed here; REPORT line 301 says so. Its photo has
+  not been measured or landmarked by any script of this audit. It is the only unused shot. It is used ONCE, blind.
+  Method, frozen (nothing below may change after the photo is opened):
+   - Model: TS4, shaft axis 75.0 mm from the toe, hosel length 61.0 mm (both from shot 1's trace, addendum 7).
+   - Placement: shaft line + ferrule (dl.observe_frame) on the last rest frame and the first frame after; depth by
+     tangency at mid-contact; 0.83 slowing after contact; reading = mean of the slowed and unslowed variants.
+   - Mid-contact: ball track with the radar reading as line-of-sight speed, ball at the tee (addendum 9).
+   - Orientation: the application's upstream metrics as they stand in the replay (face - 2.0666 deg aim, dynamic loft,
+     roll = 62.30 - dynamic lie: the rule that reproduces its roll on shots 1, 3, 4 exactly). Secondary row: face and
+     loft from this audit's measured attack and launch through the application's inversion (addendum 9, row C).
+   - Inputs that came from the application's placement stage on shots 1, 3, 4 do not exist for shot 2. Replacement
+     ("setup_free"): the resting ball and lens distance from the replay's setup box (box_resting_ball,
+     lens_distance_m); frame times from the capture's sensor timestamps; crop = ball -170..+205 px across,
+     -100..+145 px down; last rest frame = the frame before the first on which the ball's top edge has risen by more
+     than 1.5 px; club speed, path, attack from the replay's metrics (depth progression only).
+   - VALIDATION FIRST, on shots 1, 3, 4: setup_free must give the same last rest frame as the application and the
+     readings are reported beside addendum 9's row B. Whatever the difference is, setup_free's own development misses
+     are the yardstick for shot 2, not the earlier ones. If setup_free cannot be made to run on shots 1, 3, 4 it is
+     fixed there, never on shot 2.
+   - Allowed fallback on shot 2, marked if used: the sub-pixel ferrule/line observer of dplane_inputs.py if
+     dl.observe_frame fails. Any other failure is reported as a failure; the method is not adjusted on shot 2.
+  Order: (1) validation on 1, 3, 4; (2) shot 2 prediction written to results/HELDOUT-SHOT2-PREDICTION.txt with its
+  SHA-256 in this file's next addendum line; (3) only then the photo: score lines, toe ends and mark by the method of
+  photo_grooves.py / photo_marks.py with shot 1's club constants (toe extreme 18.7 mm beyond the score-line ends,
+  lowest line 4.9 mm above the leading edge); regions chosen by eye on the photo, as for shots 1, 3, 4.
+  Stated before running: "in family" = heel-toe miss within 5 mm and height miss within 4 mm. One shot, same club,
+  same session, same day: it can show the method failing; it cannot establish accuracy.
+  NOTE 10a (after step 1, before shot 2 was run). The last-rest-frame rule as written above failed on shots 1, 3, 4
+  (the club covers the ball one or two frames BEFORE contact; the 15..165 arc does not fit shot 1's resting ball; a
+  runaway circle fit hung the run). Fixed on those shots: last rest frame = the last frame on which the ball still
+  measures at rest (arc -10..190; top edge within 1.5 px, centre within 3 px across); ball_flight_lib.measure now
+  returns None for a circle 3x off its guess. Earlier readings through the application's setup are unchanged by the
+  guard (14.5/22.2, 40.0/28.7, 64.3/26.8 before and after). Validation (results/HELDOUT-VALIDATION.txt): same rest
+  frames as the application on all three; setup_free misses +1.2/-1.5, -4.0/-2.9, -2.3/+0.6 mm (heel-toe/height).
+  These are the yardstick for shot 2.
+  NOTE 10b: THE FROZEN METHOD FAILED ON SHOT 2 (results/HELDOUT-SHOT2-FROZEN-FAILED.txt, kept). The last-rest-frame
+  rule returned frame 40; the ball track then had fewer than two measurable frames. Looking at the capture frames
+  (figures/frames-shot2-38-47.png; NOT the face photo, which is still unread): the head covers the ball completely
+  on frames 41 and 42 and the ball is first seen in flight on frame 43. The ball is never seen at rest on its last
+  rest frame, so "the last frame on which the ball measures at rest" cannot find it. This is a real limit of that
+  rule on a centre strike, and it is the reported outcome of the blind test as frozen.
+  AMENDMENT, made knowing shot 2's capture frames but not its photo or mark (so the reading is still blind to the
+  truth, but the method is no longer frozen ahead of shot 2; said so wherever the result is quoted):
+     first moved frame = the earliest frame fc after the last frame measured at rest for which the ball track on
+     frames fc, fc+1, fc+2 (line-of-sight radar) fits with worst pixel under 1 px AND puts mid-contact between
+     frame fc-1 and frame fc (0.2 ms tolerance). Last rest frame = fc-1.
+  It must reproduce frames 43/44, 43/44, 44/45 and the validation readings on shots 1, 3, 4 before shot 2 is rerun.
+  Nothing else changes. If dl.observe_frame cannot see the shaft and ferrule on shot 2's bracket frames, the one
+  fallback already allowed above applies; anything else is a failure.
+  NOTE 10c (before the photo). Re-validation with the amended rule: first run refused shot 1 (its own track's worst
+  pixel is 1.05 px against the 1 px I had written); limit set to 1.5 px on the development shots; frames 43/44,
+  43/44, 44/45 and the validation readings then reproduce exactly (results/HELDOUT-VALIDATION.txt).
+  SHOT 2 PREDICTION, amended method, photo unread: 42.1 mm from the toe, 11.8 mm above the leading edge (secondary
+  42.1 / 12.0). Frames 42/43; mid-contact 2.48 ms after frame 42. No fallback was needed.
+  results/HELDOUT-SHOT2-PREDICTION.txt  sha256 b17d9e909af3c001ad17c2baebec20a0a2c11977a9a37f39a011b603b3b27bdf
+  results/heldout-shot2-prediction.json sha256 e3bf4cfed9d543fddc6d43f83f85b4351b80a40f87eba0eb8cd386f2033e215b
+  written 2026-11-14T00:18:30Z. The photo is opened after this line.
+
+ADDENDUM 11 (13 Nov 2026; written before running). THE HOSEL LENGTH FROM EACH SWING ALONE
+  Owner's objections: (a) hosel and ferrule lengths differ between clubs, so a fixed length will not transfer;
+  (b) remembering a length per club number fails when the player changes model under the same number. So the
+  length must come from the swing being read, with no memory. Addendum 8's attempt (one clear-air frame, solved
+  together with the turn) gave 51.5 / 67.4 / 60.3 mm for one club and was discarded.
+  Idea tested here: the length lies along the shaft axis, and points on that axis do not move when the club turns
+  about it. Measure it along the axis only.
+  M  On each frame between 13 and 3 ms before mid-contact (club still in the air, also on the fat shots) where the
+     shaft line and ferrule are found: the distance in image rows from the ferrule's centre (sub-pixel) to the
+     lowest point of the changed club pixels in a band -2..+6 px toe-ward of the shaft axis (sub-pixel, at
+     max(8 DN, 4 sigma)). The same distance on the TS4 model placed on that frame by shaft line + ferrule with the
+     61.0 mm length, at the supplied angles and the frame's depth. H = 61.0 + (observed - model) / (image rows per
+     mm along the shaft). Per shot: the median of its frames. All four shots, through setup_free.
+  RULE, before running: usable in this form only if (1) frames of one swing agree within 2 mm (max - min), (2) the
+  four shots' H agree within 4 mm (same club), and (3) with each shot's own H no reading moves away from its mark
+  by more than 1 mm against the 61.0 result. All four marks are known now, so this is a stability test, not an
+  accuracy test. Script hosel_self.py; results/HOSEL-SELF.txt.
+
+ADDENDUM 12 (13 Nov 2026; written before running). THE VISIBLE HOSEL ON THE TWO FRAMES ROUND CONTACT
+  Owner's idea after addendum 11 failed: take the hosel's height on the frame before impact and the frame after and
+  interpolate. Combined with addendum 11's candidate (a point on the head that stays above the turf).
+  M  On the last rest frame and the first frame after, along the observed shaft axis (brightest of +-1.5 px across):
+     top of the hosel = lower end of the dark ferrule gap (half level of the shaft's brightness, sub-pixel);
+     bottom of the hosel = where the bright hosel run below it first falls under half its own plateau (median of rows
+     2..8 below its top), sub-pixel. L = that length in mm, using the image rows per mm along the shaft of the TS4
+     model as placed on that frame by the frozen method (H = 61.0). L at contact = the two frames interpolated with
+     the solve's own time fraction.
+  First probe, feasibility only. RULE: the visible hosel is a usable anchor candidate only if L at contact agrees
+  across the four shots within 3 mm (max - min) and the two frames of each shot differ by no more than 4 mm.
+  If the bright run does not end at the head (it runs on into a bright sole or stops early at a shadow), that is a
+  failure of this definition and is reported as such. Script hosel_visible.py; results/HOSEL-VISIBLE.txt.
+
+ADDENDUM 13 (13 Nov 2026; written before running). OWNER'S PLACEMENT: HOSEL LINE + TOP EDGE + TOE, NO CLUB LENGTH
+  Owner: "the head's top edge might work, but we also need to add the toe and the hosel. The length of the hosel
+  does not matter; what matters is that the hosel in the model is aligned on the hosel in the image."
+  On the last rest frame, TS4 model (axis 75.0), through setup_free, all four shots (development run: every mark is
+  known):
+     hosel   the model's shaft axis on the observed shaft line at three rows (across the shaft only; no length)
+     top     carry_lib.cavity_top in the 23 columns inside the toe, as before, but the toe column now comes from
+             this script's own toe finder (no carried silhouette, so shot 2 can be run)
+     toe     per row, the right-most pixel changed by more than 25 DN (sub-pixel, with 3 changed pixels in the 6 to
+             its left), rows whose point is within 12 px of the furthest; rows where it falls on the resting ball
+             (radius + 2 px) dropped. Residual: observed x minus the model outline's right-most x on that row.
+  Variants:  V1 hosel + top, face supplied (the earlier top-edge placement, reproduced through this path)
+             V2 hosel + top + toe, face supplied (two unknowns)
+             V3a hosel + top + toe, turn about the vertical free (three unknowns); the turned face used throughout
+             V3b the V3a placement, but the ball's contact point taken with the SUPPLIED face normal and read where
+                 it appears on the placed model (the free turn treated as an outline-matching number only, because
+                 from behind an absolute turn cannot be told from a 2 % scale error; addendum 8)
+  The frame after contact as in pipeline.py: top edge sought round the rest placement moved by the ferrule's motion,
+  else shaft line + ferrule at the length the rest placement itself implies. No club length is given anywhere.
+  RULE, before running: the owner's placement "works on these four" if one variant, the same for all shots, misses
+  every mark by no more than 4 mm heel-toe and 4 mm in height. Expectation written first: the toe carries little
+  height information, so I expect shot 3's height miss (+9 mm in V1) to stay above 4 mm.
+  Script outline_fit.py; results/OUTLINE-FIT.txt; figures/outline-fit-shot<N>.png.
+  NOTE 13a (after the first run; before the second). First run: every variant FAILS (results/OUTLINE-FIT.txt, kept).
+  V1 is within 3.4 mm heel-toe on all four but 3.0 / 7.3 / 8.0 / 5.8 mm HIGH, the clean shot 2 included. So the
+  height error of the top-edge placement is not the turf haze, as I had concluded in addenda 7 and 9. The free turn
+  (V3) runs away (-49, -36 deg) on 5 to 10 toe points.
+  Cause found by reading my own earlier work: REPORT lines 74-75 and 192-195 record that the head's top line is a
+  thin bright rim 2 to 3 px thick and that "the top edge" this finder returns is the CAVITY's upper edge, 2.5 to
+  3.0 px BELOW the head's true top. carry.py subtracted that rim. pipeline.py's place_edge (addendum 7) and this
+  script compared the cavity edge with the model's top outline directly. The model therefore sat 2.5 to 3 px low
+  and every top-edge reading since addendum 7 is about 5 to 7 mm too high for that reason.
+  SECOND RUN, defined now: for each column with a cavity edge, the rim's own upper edge = the strongest brightening
+  going down within the 6 rows above the cavity edge (at least +3 DN per row), sub-pixel by the gradient's parabola.
+  The model's top outline is fitted to those points; a column without one uses the cavity edge minus the median rim
+  thickness of the columns that have one (no column has one: the shot is not placed). Nothing else changes; same
+  variants, same rule. Output results/OUTLINE-FIT-rim.txt, figures/outline-fit-rim-shot<N>.png.
+  NOTE 13b (after the second run; before the third). Second run: FAILS (results/OUTLINE-FIT-rim.txt, kept). V1:
+  shot 1 +2.1/-0.4, shot 2 +1.1/+5.5, shot 3 -5.5/-5.0, shot 4 -3.2/-1.3. Rim found 3.14, 3.17, 6.00, 3.50 px.
+  Two faults visible in the output, both mine: (i) only the rest frame was corrected; the frame after contact was
+  still placed by pipeline_lib.edge_window, which is the same cavity edge without the rim, and on shot 2 that frame
+  carries 0.72 of the weight; (ii) on shot 3 every rim "top" sits at the far end of the 6-row search (6.00 px):
+  the finder ran into its limit under the haze, it did not find a rim.
+  THIRD RUN, defined now: (i) the frame after contact is placed by shaft line + ferrule at the ferrule distance the
+  rest-frame placement itself implies (the head carried rigidly by the ferrule over one frame; no top edge on that
+  frame, no given length); (ii) a rim top on the first row of its search is rejected; with fewer than 6 valid
+  columns the rim thickness is taken, in mm, from the same swing's previous frame measured the same way; if that
+  also has fewer than 6, the shot is not placed. Variants V1 and V2 only (the free turn ran away twice and is
+  dropped). Same rule. Output results/OUTLINE-FIT-rim2.txt. This is the third pass over four known marks: whatever
+  it gives is fitted to these shots and proves nothing about a fifth.
+  NOTE 13c (after the third run; owner: go on with the toe finder). Third run FAILS: V1 -0.1/-5.6, -1.5/-0.7, not
+  placed, -3.5/-2.1 (results/OUTLINE-FIT-rim2.txt, kept).
+  Looked first (figures/toe-look.png, raw and difference images of the four rest frames; nothing measured). What is
+  there on all four: the dark cavity of the back of the head, bounded above by the bright top-line rim, at the toe
+  by the same rim, below by the bright bar. On shots 1 and 2 the rim is seen against a darker background. On the
+  fat shots 3 and 4 the head's top runs across the ball or under the haze: the cavity's edge is sharp, the rim's
+  outer edge is not visible there. So the feature that exists everywhere is the CAVITY's boundary, and the head's
+  outline is that boundary moved out by the rim's thickness.
+  TOE FINDER, defined now (scripts/outline_fit2.py):
+     cavity   pixels darker than (median brightness 2 rows under the top-edge points + 12 DN) connected to those
+              points, in the head's window; per row its right-most pixel, sub-pixel at that level
+     toe rows rows whose right end is within 10 px of the cavity's furthest; the top row dropped
+     rim      thickness t: vertical (rim's own upper edge above the cavity edge, as in note 13b) on top columns and
+              horizontal (strongest darkening within 6 px right of the cavity's right edge, limit picks rejected)
+              on toe rows; vertical values x 0.94 (20 deg top-line slope); median of all; needs 6 or more values,
+              else the shot is not placed (no value carried from another swing)
+     fit      shaft line at three rows + top points (rim tops on the model outline; other columns: cavity edge t
+              inside it) + toe rows (cavity edge t inside the outline, measured as distance to the outline)
+     W1 two unknowns (across, down). W2 a third: the model's width scaled about the shaft axis (k), so that hosel
+        and toe can both be met; reading from the toe divided by k (a narrower-looking head read as turned or
+        farther, not as a shorter blade). The frame after contact carried by the ferrule as in note 13b.
+  Also reported, no rule: the ferrule distance each rest placement implies. The same club should give the same
+  number on every shot; it is a check that needs no mark.
+  Same rule as before for W1 or W2 (4 mm both ways on all four). Fourth pass over four known marks.
+  NOTE 13d (after the fourth run; before the fifth and last). Fourth run FAILS (results/OUTLINE-FIT2.txt, kept):
+  W1 -0.3/-5.6, 0.0/-1.2, not placed, -2.3/-3.0; W2 runs away (width 31738 on shot 1, 1.375 on shot 2).
+  Two faults, both visible in figures/outline-fit2-shot2.png: (i) on shot 2 the dark "cavity" region leaks past the
+  toe into a dark band of the background, so its toe rows sit 6 to 12 px right of the head; (ii) I measured toe
+  points by their distance to the nearest part of the outline, so with the width free they attach to the top line
+  and the width is unconstrained. Not a fault: the ferrule distance the W1 placements imply is 56.8 / 60.1 /
+  57.6 mm on the three placed shots, the same club giving the same number to about 3 mm without being told it.
+  FIFTH RUN, defined now (scripts/outline_fit3.py): (i) a toe row is kept only where, going right from inside the
+  cavity, the brightness rises by at least 4 DN per px while still inside the 25 px beyond the last top column; the
+  edge is the steepest point of that first rise; rows more than 4 px from the median of the rows are dropped; 4 or
+  more rows needed for the toe to be used; (ii) toe residuals are horizontal (cavity edge + rim thickness against
+  the outline's right-most point on that row), top residuals vertical; the width is bounded to 0.85..1.15.
+  Same rule. This is the last pass in this sitting whatever it gives; a fifth pass over four known marks is tuning.
+  NOTE 13e (after the fifth run; owner: continue). Fifth run FAILS: W1 +0.1/-5.7, -1.6/-0.6, not placed, -1.9/-2.0
+  (results/OUTLINE-FIT3.txt, kept). Seen on figures/outline-fit3-shot1.png, not measured: shot 1's rim-top picks
+  on the heel-side columns lie on a flat row, the edge of a background stripe.
+  SIXTH RUN, defined now, before any per-column value is printed (scripts/outline_fit4.py):
+     top     every column uses the CAVITY's upper edge; the model's top outline is that edge raised by one rim
+             thickness for the whole frame. No column's own rim pick is used as a point any more.
+     rim     the thickness is one number per SWING: the median, in mm, of every valid per-column and per-row value
+             on the rest frame AND on the frame before it (same finder; the previous frame observed by
+             dl.observe_frame or, if that fails, by shaft line + ferrule + the head's first wide rows). 6 or more
+             values needed, else not placed. Nothing is carried from another swing.
+     toe, hosel, the frame after contact: as in the fifth run.
+     W0 hosel + top; W1 hosel + top + toe; W2 the same with the width free (0.85..1.15).
+  Same rule (4 mm both ways, all four, one variant). Expectation written first: shot 1 moves toward its mark by 1 to
+  2 mm, not by the 5.7 it needs; shot 3 is placed for the first time and I do not know where it will land.
+  The per-column values are printed in the output so the next decision is made on data, not on a picture.
+  NOTE 13f (after the sixth run; before the seventh). Sixth run FAILS on shot 1 only: W1 +0.3/-5.3, -1.5/-0.4,
+  -1.0/+1.9, -1.7/-0.9 (results/OUTLINE-FIT4.txt, kept). Shot 3 is placed for the first time. My expectation for
+  shot 1 (1 to 2 mm better) was wrong: it moved 0.4 mm. The background-stripe explanation is withdrawn.
+  Check against the owner's trace on shot 1 f43 (results/TRACE-VS-TOP.txt): the trace's top is 1.8 px = 3.1 mm
+  below the head top this method takes and 1.2 px above the cavity's edge; its toe is 3.7 px = 6.4 mm inside the
+  head toe this method takes, on the cavity's toe edge. The trace follows the dark body and leaves the rim out.
+  (Consequence noted, not acted on here: the TS4 model's "shaft axis 75.0 mm from the toe" and "hosel 61.0 mm" were
+  both fitted to that trace in addendum 7; 75.0 + 6.4 = 81.4 against the spec sheet's 80.1.)
+  HYPOTHESIS for shot 1, with its prediction, written before running: unlike the ferrule placement, a top-edge
+  placement depends on the loft it is given (the top line stands 55 mm x cos(loft) above the leading edge, and the
+  ball's contact point moves with the face normal). Shot 1's loft, 26.65 deg, came from the IWR launch angle that
+  addendum 9 found 4.6 deg too high; with the measured inputs the same inversion gives 19.8. Addendum 9 already
+  saw the top-edge reading on shot 1 rise 3.6 mm with that loft.
+  SEVENTH RUN: outline_fit4.py unchanged except the angles: shots 1, 3, 4 take addendum 9's row C (measured attack
+  and launch through the application's inversion); shot 2 takes the secondary orientation of its blind prediction
+  (launch from the ball track, the application's attack; no ferrule-based attack exists for it on this path).
+  PREDICTION: shot 1's height miss moves up by 3.5 to 5 mm, to between -2 and 0; shot 3 from +1.9 to about +1;
+  shot 4 from -0.9 to about -1.5; shot 2 to about 0. If shot 1 does not move by at least 3 mm the hypothesis is
+  wrong. Same rule for the variants. Output results/OUTLINE-FIT4-measured.txt.
+
+ADDENDUM 14 (13 Nov 2026; written before the runner is run). ONE RUNNER, FROZEN, READING NO PHOTO AND NO MARK
+  Seventh run: PASS, W1 within 1.8 mm both ways on all four (REPORT addendum 13 concluded). Owner: "run the system on
+  these shots like you've never done it before and know nothing about the shot positions. We need to test how the
+  actual fusion and impact position would have shown us"; then "yes, do the genuine blind test".
+  What can and cannot be honest here. The method was developed over seven passes on these four shots and I know
+  their marks. Running it on them again cannot be blind. What CAN be done on them: one script, the same for every
+  shot, no per-shot setting anywhere, every angle computed inside it the same way, opening no face photo and no
+  mark. (One file it does read comes from a photo: results/ts4-model.json, the club's outline, drawn from shot 1's
+  face photo and the spec sheet in addendum 7. It holds the shape of the head, not where any ball struck it.)
+  Its output is what such a system would have shown. A genuine blind test needs shots whose marks
+  I have not seen; see the end of this addendum.
+  THE RUNNER (scripts/system_run.py), per shot, in this order, nothing else:
+   inputs   the capture's frames and timestamps; from the unmodified replay (application 0fa9870b): the setup box's
+            resting ball and lens distance, the OPS ball and club speeds, club path, dynamic lie, the aim offset.
+            NOT used: the application's launch angles, attack angle, face, loft, IWR output, contact time, placement.
+   1 frames setup_free: last rest frame and first moved frame from the ball's own track (note 10b).
+   2 ball   track with the radar as line-of-sight speed (addendum 9): mid-contact, launch against the camera axis,
+            direction. Camera pitch from the resting ball (lens 95 mm, ball centre 21.35 mm). Launch against the
+            horizon = minus that pitch; direction against the target line = plus the aim offset.
+   3 club   descent from the sub-pixel ferrule on the frames before contact, addendum 9's rule: quadratic tangent
+            at mid-contact with 4 or more frames and a turn of 0..3 deg/ms, else the last chord moved to contact at
+            1.3 deg/ms; fewer than 2 frames: the application's attack, flagged. Against the horizon = minus pitch.
+   4 fusion the application's own inversion (face_and_loft_from_launch, 7-iron) of steps 2 and 3 with the
+            application's club path -> face, dynamic loft. Roll = 62.30 - dynamic lie.
+   5 place  hosel line + top edge + toe on the last rest frame, one rim thickness per swing, the head carried to the
+            first moved frame by the ferrule (addendum 13 pass 6, variant W1; W0 if fewer than 4 toe rows); TS4
+            model with its shaft axis 75.0 mm from the toe (a number fitted to the owner's trace of shot 1; kept).
+   6 read   the ball's contact point on the face at mid-contact: mm from the toe, mm above the leading edge.
+  Differences from the seventh run, fixed now and not to be revisited after the output is seen: the ball's direction
+  comes from the ball track on every shot (the seventh run kept the application's, which on shot 1 was the IWR's);
+  shot 2's attack is measured like the others (the seventh run used the application's).
+  PORT CHECK before the real run: with the seventh run's angles forced in, step 5-6 must reproduce
+  results/outline-fit4-measured.json (W1) exactly. That checks the port and looks at nothing new.
+  ORDER: port check; the real run on shots 1-4; results/SYSTEM-RUN.txt and system-run.json hashed into this file;
+  only then a separate script sets them beside the marks. No change to the runner after its output is seen, whatever
+  it shows; a crash is fixed and said so.
+  GENUINE BLIND TEST. The only face photos never opened by this audit are those of an earlier session
+  (pi-handoff/Harjot-outdoor-test-1, arm5: shots 2, 3, 5, 33; shot 5 is a 19 mph reading). Their photos stay
+  unopened. That session was recorded at 1280x800 and 120 frames a second, 24 frames per capture; the method was
+  built at 640x400 and 276. Whether it can be run there fairly is decided after the four-shot run, in writing,
+  before any of its photos is opened.
+  NOTE 14a. Port check: the runner with the seventh run's angles reproduces results/outline-fit4-measured.json (W1)
+  on all four shots with a largest difference of 0.00 mm. Real run on shots 1-4, first and only execution:
+     results/SYSTEM-RUN.txt   sha256 ab8fe5cdbdd8ecd72887856909129921f57892905e7cdedc95265cd052e8ea71
+     results/system-run.json  sha256 d6e238c87a930c2ced102478ef9655ad20e74546c209af2dec295f11444a06c3
+     written 2026-11-14T01:57:55Z. Readings: 13.1/22.8, 42.0/12.6, 42.0/31.0, 64.2/26.5 (mm from the toe / above the
+     leading edge). The comparison with the marks is made after this line by a separate script.
+  NOTE 14b: THE EARLIER SESSION IS NOT RUN. DECIDED WITH ITS PHOTOS STILL UNOPENED.
+  The application's replay (0fa9870b, unmodified, scripts/replay_t1.py) runs on its shots 2, 3 and 33 but returns
+  status "partial" with "camera capture or recorded handedness unavailable": no resting ball, no lens distance, no
+  club path, no dynamic lie (and no aim offset on shot 33). Those are inputs the runner is defined on; setup_free
+  cannot start. The captures are 24 frames at 8.69 ms spacing (276 fps captures: 59 frames at 3.62 ms).
+  To run there I would have to write and validate my own resting-ball finder, range, club path and lie, bin the
+  frames, re-choose the reference frames, and accept a frame up to 8.7 ms from contact where the method was built on
+  0.5 to 2.5 ms. That would be a new, unvalidated method tested once: a failure could not be told from the
+  adaptation, and a success would be luck. A blind test must not be spent that way. The four photos stay unopened
+  and unused. A genuine blind test needs new shots captured as the four were (640x400, 276 fps, arm6).

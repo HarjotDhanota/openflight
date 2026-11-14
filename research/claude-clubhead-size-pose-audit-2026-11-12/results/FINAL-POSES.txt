@@ -1,0 +1,13 @@
+club speed toward the target 31.55 mm/ms; ball contact point (-66.1, 15.3, 1761.5) mm; size before 0.919
+
+track instant (mid-contact -0.43 ms): f43 2.01 ms before, f44 1.61 ms after
+   contact: face was 13.2 mm short of the ball along the face normal; face centre moved 14.9 mm along its camera ray to touch (depth 1747.7 -> 1762.6 mm)
+   f43 depth 1679.3 -> 1699.4 mm; f44 depth 1793.4 -> 1804.9 mm; size 0.919 -> 0.930 (same pixels on f43)
+   impact point: +26.3 mm toe-ward, +2.8 mm up (with the old depth: +26.1, +2.8)
+   on f44 the ball's surface is 22.8 mm clear of the face plane (it should be positive: the ball has left)
+
+app instant (mid-contact +0.00 ms): f43 2.44 ms before, f44 1.18 ms after
+   contact: face was 2.1 mm short of the ball along the face normal; face centre moved 2.4 mm along its camera ray to touch (depth 1760.7 -> 1763.1 mm)
+   f43 depth 1679.3 -> 1686.2 mm; f44 depth 1793.4 -> 1794.0 mm; size 0.919 -> 0.923 (same pixels on f43)
+   impact point: +22.6 mm toe-ward, +3.9 mm up (with the old depth: +22.5, +3.9)
+   on f44 the ball's surface is 32.4 mm clear of the face plane (it should be positive: the ball has left)

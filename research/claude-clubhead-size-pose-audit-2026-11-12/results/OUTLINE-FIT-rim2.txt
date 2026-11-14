@@ -1,0 +1,22 @@
+SHOT 1   mark 12.3 / 23.9 | rest frame 43: toe points 5 (furthest x 162.4), top-edge points 19, lowest visible row 114.5
+   rim: its own upper edge found on 17 of 19 columns; median thickness 3.07 px = 5.2 mm
+   V1 hosel + top                     face  +1.4 (supplied +1.4) | fit rms px: shaft 0.06, top 0.97, toe  -   | reading 12.2 / 18.2 (miss -0.1 / -5.6)
+   V2 hosel + top + toe               face  +1.4 (supplied +1.4) | fit rms px: shaft 0.40, top 2.11, toe 5.49 | reading 10.7 / 15.4 (miss -1.6 / -8.5)
+
+SHOT 2   mark 43.3 / 12.4 | rest frame 42: toe points 7 (furthest x 190.2), top-edge points 23, lowest visible row 108.5
+   rim: its own upper edge found on 22 of 23 columns; median thickness 3.17 px = 6.0 mm
+   V1 hosel + top                     face  +5.6 (supplied +5.6) | fit rms px: shaft 0.27, top 0.97, toe  -   | reading 41.9 / 11.7 (miss -1.5 / -0.7)
+   V2 hosel + top + toe               face  +5.6 (supplied +5.6) | fit rms px: shaft 1.00, top 0.93, toe 3.69 | reading 41.2 / 11.4 (miss -2.1 / -1.0)
+
+SHOT 3   mark 43.5 / 30.3 | rest frame 43: toe points 10 (furthest x 187.4), top-edge points 6, lowest visible row 113.5
+   rim: its own upper edge found on 1 of 6 columns; median thickness 2.85 px = 6.2 mm
+        fewer than 6, and the previous frame could not be measured (ValueError)
+   too few edge points: not placed
+SHOT 4   mark 66.1 / 28.1 | rest frame 44: toe points 9 (furthest x 200.4), top-edge points 15, lowest visible row 113.5
+   rim: its own upper edge found on 6 of 15 columns; median thickness 3.50 px = 7.1 mm
+   V1 hosel + top                     face  +8.5 (supplied +8.5) | fit rms px: shaft 0.04, top 0.48, toe  -   | reading 62.6 / 26.0 (miss -3.5 / -2.1)
+   V2 hosel + top + toe               face  +8.5 (supplied +8.5) | fit rms px: shaft 0.78, top 0.96, toe 3.20 | reading 60.5 / 24.5 (miss -5.6 / -3.6)
+
+RULE (written before running): one variant, the same for all four, within 4 mm heel-toe and 4 mm in height on every shot.
+   V1   misses (heel-toe / height): -0.1 / -5.6   -1.5 / -0.7   not placed   -3.5 / -2.1 -> FAIL
+   V2   misses (heel-toe / height): -1.6 / -8.5   -2.1 / -1.0   not placed   -5.6 / -3.6 -> FAIL

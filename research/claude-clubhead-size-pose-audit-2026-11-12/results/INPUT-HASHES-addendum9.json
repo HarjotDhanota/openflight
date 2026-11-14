@@ -1,0 +1,141 @@
+{
+ "root": "F:/Coding/OpenFlight/research/fusion-timing-replay-2026-11-05/run-002/package/sessions/harjot-outdoor-test-2/arm6/paired/run-01",
+ "files": {
+  "arm6/camera/camera_20261027_170649_455_001/first.pgm": {
+   "sha256": "376379efe61b6dfd4cab8378c91adae0fe2b9a199a5a5665fd475594752859ec",
+   "bytes": 256015
+  },
+  "arm6/camera/camera_20261027_170649_455_001/frames.npz": {
+   "sha256": "a18c3d7ff23f3b9a11e16a94c74982e5e5ca6555265f6557b58876ee6f4adc1d",
+   "bytes": 15108148
+  },
+  "arm6/camera/camera_20261027_170649_455_001/last.pgm": {
+   "sha256": "842c819f06083bbf52ac81c43ac7f6e27fa7f8f5dbcc56bc78d8ce5ff6f4be89",
+   "bytes": 256015
+  },
+  "arm6/camera/camera_20261027_170649_455_001/metadata.json": {
+   "sha256": "11ad0c1a3c36ebffa0a2569d342e090e710ec5032bd3133ee6bbf91c88194066",
+   "bytes": 19475
+  },
+  "arm6/camera/camera_20261027_170649_455_001/trigger.pgm": {
+   "sha256": "77650cddae2e594219578914de9663a13ad15fd88f0b1ca5040ab1bdb3206773",
+   "bytes": 256015
+  },
+  "arm6/camera/camera_20261027_170803_320_002/first.pgm": {
+   "sha256": "e4e753bc569fdaa2c84dcc5f75ac0216fe1567d372cc8c6aa06b03f90413cdf6",
+   "bytes": 256015
+  },
+  "arm6/camera/camera_20261027_170803_320_002/frames.npz": {
+   "sha256": "bed17ab5434b8843f527bbc602ac0699eb6ff99542fcd6c5d0851b68eb7745f0",
+   "bytes": 15108148
+  },
+  "arm6/camera/camera_20261027_170803_320_002/last.pgm": {
+   "sha256": "60996c29493a16ce8a174efcdc5c040c4bc06364307de06cbd4cb9eb7f635173",
+   "bytes": 256015
+  },
+  "arm6/camera/camera_20261027_170803_320_002/metadata.json": {
+   "sha256": "731c9aca5d00b831b3a2776c995927d23acc923c1ea02358e8ecd3797fdf79d6",
+   "bytes": 19799
+  },
+  "arm6/camera/camera_20261027_170803_320_002/trigger.pgm": {
+   "sha256": "aeb29f6e05f7a241d19759f9b009409fa49ad1c5825b29e759c1b2bc8ed58dba",
+   "bytes": 256015
+  },
+  "arm6/camera/camera_20261027_170845_065_003/first.pgm": {
+   "sha256": "a085a45596bf0e5e64bb31f32df77f15398a1085b7d597d56b20aab7e594b63d",
+   "bytes": 256015
+  },
+  "arm6/camera/camera_20261027_170845_065_003/frames.npz": {
+   "sha256": "5c8d5fda2f29aadd9087c844807371ce14e0b895dbc489b3228fa1da30fd0c4f",
+   "bytes": 15108148
+  },
+  "arm6/camera/camera_20261027_170845_065_003/last.pgm": {
+   "sha256": "173f7f4ff6cb1337dda3e22d0a40e6dca0667f21077fffed7fe86e7d137ea591",
+   "bytes": 256015
+  },
+  "arm6/camera/camera_20261027_170845_065_003/metadata.json": {
+   "sha256": "55f875b81768436383bc9c2e21c36ec13ac7e491c5a0d873a64847c744182267",
+   "bytes": 19484
+  },
+  "arm6/camera/camera_20261027_170845_065_003/trigger.pgm": {
+   "sha256": "646180353cd2d1a7b5795a737cd69c3ad2fe38e9036f505306e90190c036447a",
+   "bytes": 256015
+  },
+  "arm6/camera/camera_20261027_171034_000_004/first.pgm": {
+   "sha256": "d02439db47239d883dba5b360ad1bcaa299951649f0c3c95212383ee8fcb25ef",
+   "bytes": 256015
+  },
+  "arm6/camera/camera_20261027_171034_000_004/frames.npz": {
+   "sha256": "38370d9cc84b94012ea42d6a8ac3107153ced30090830d80f38b1c617c7f9c52",
+   "bytes": 15108148
+  },
+  "arm6/camera/camera_20261027_171034_000_004/last.pgm": {
+   "sha256": "20f6a4ba4fcd363df74b0fd299d54b52f41576c555a1137e2113e9b519acddef",
+   "bytes": 256015
+  },
+  "arm6/camera/camera_20261027_171034_000_004/metadata.json": {
+   "sha256": "1fa395bfbcc55a7b4d0e737aa697e2d5896943255b1bc0d0cf71f93a7d01687c",
+   "bytes": 20020
+  },
+  "arm6/camera/camera_20261027_171034_000_004/trigger.pgm": {
+   "sha256": "85279cf8791b4732893d6f43532f65efd357578af6c876570f7f44e71642a776",
+   "bytes": 256015
+  },
+  "arm6/camera/camera_20261027_171231_622_005/first.pgm": {
+   "sha256": "61c4c66bde84c5317c683bcee6685c37ec4f40e6506b6e6e4e042061cdd95314",
+   "bytes": 256015
+  },
+  "arm6/camera/camera_20261027_171231_622_005/frames.npz": {
+   "sha256": "d93c44bf91d7f377bfe5dfc5e431ef038253a17b9c1e844b529a17129efb64e3",
+   "bytes": 15108148
+  },
+  "arm6/camera/camera_20261027_171231_622_005/last.pgm": {
+   "sha256": "f31c8a3aab679c07b83be0e7f43f900210769a19580c907af3636542d5707063",
+   "bytes": 256015
+  },
+  "arm6/camera/camera_20261027_171231_622_005/metadata.json": {
+   "sha256": "957cf9b7f0eb9d1df776680bf9423a9bc87ffcb323a718e50492e6486b9faf14",
+   "bytes": 20024
+  },
+  "arm6/camera/camera_20261027_171231_622_005/trigger.pgm": {
+   "sha256": "8506221df05cb6ccedaf9d16f6e43885daeeabd82b7e5250df3349fbcb31820a",
+   "bytes": 256015
+  },
+  "face-photos/shot-0001.pgm": {
+   "sha256": "31d479a3a2baaf1e8b74b9777c29e3d683f9f0736c34c077e3a7af7cb98930ca",
+   "bytes": 256015
+  },
+  "face-photos/shot-0002.pgm": {
+   "sha256": "66b78f07de67fd68b84c5e72dd27aec44647bf6923ab1c32464ff16a8af030a5",
+   "bytes": 256015
+  },
+  "face-photos/shot-0003.pgm": {
+   "sha256": "d478d5d4d78ff2302842795293e35cb03193dc1ef4f621fc968700bdbc4a2c33",
+   "bytes": 256015
+  },
+  "face-photos/shot-0004.pgm": {
+   "sha256": "99a727a0557745274afc7472b4b530ccc780abcf31587c03036eb1235e3bfcf6",
+   "bytes": 256015
+  },
+  "free_play_exposure_plan.json": {
+   "sha256": "05de65ff28206a971cb58d3c719228c8b458d805c511ad89c761eb8d6733a910",
+   "bytes": 4330
+  },
+  "free_play_exposure_study.json": {
+   "sha256": "9f6244c7e49036074aefaf821b805fe71c55249ea96f8285247c9d34deea1700",
+   "bytes": 9906
+  },
+  "session_20261027_170621_arm6.jsonl": {
+   "sha256": "faf9c846162f5f2da94ba9bc16af9006b3f739db3b03759265ea5f60d7eca946",
+   "bytes": 1129776
+  },
+  "setup_admission.json": {
+   "sha256": "e192ad379b9394df88912cc0343724dbb69aee0d18a86e1d77da57a6cd438296",
+   "bytes": 40220
+  },
+  "tee_range.json": {
+   "sha256": "da3cd9c79e7980df474553c6e61c22d254dbf88bbf93fa0e3f9a51357b0c23c3",
+   "bytes": 38316
+  }
+ }
+}

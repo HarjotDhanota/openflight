@@ -1,0 +1,101 @@
+SHOT 1  ops status ok; ball 81.66 mph, club 72.05176094208986 mph
+   spin_rpm               2252.197265625
+   confidence             0.59
+   snr                    16.2965737735602
+   quality                "experimental"
+   method                 "multitaper_ungated"
+   multipath_fade_hz      25.0
+   modulation_depth       0.5964781701990245
+   peak_freq_hz           37.53662109375
+   seam_cycles            2.8978271484375
+   at_lower_rail          false
+   at_upper_rail          false
+   candidates             [{"rank": 1, "rpm": 2252.197265625, "freq_hz": 37.53662109375, "relative_magnitude": 1.0, "snr": 16.2965737735602, "at_lower_rail": false, "at_upper_rail": false, "expected_spin_error_pct": null, "selected": true}]
+   phase_method           null
+   phase_rpm              null
+   phase_snr              null
+   phase_agreement_pct    null
+   phase_confirmed        false
+   rejection_reason       null
+   -> 2252.197266 rpm = 37.536621 Hz = exactly 41 bins of 30000 Hz / 32768
+
+SHOT 2  ops status ok; ball 96.63 mph, club 80.15707492031251 mph
+   spin_rpm               0
+   confidence             0
+   snr                    0.0
+   quality                "Ball signal too short (0 samples, need 128)"
+   method                 "multitaper_ungated"
+   multipath_fade_hz      null
+   modulation_depth       null
+   peak_freq_hz           null
+   seam_cycles            null
+   at_lower_rail          false
+   at_upper_rail          false
+   candidates             []
+   phase_method           null
+   phase_rpm              null
+   phase_snr              null
+   phase_agreement_pct    null
+   phase_confirmed        false
+   rejection_reason       "Ball signal too short (0 samples, need 128)"
+   -> 0.000000 rpm = 0.000000 Hz = exactly 0 bins of 30000 Hz / 128
+   -> 0.000000 rpm = 0.000000 Hz = exactly 0 bins of 30000 Hz / 256
+   -> 0.000000 rpm = 0.000000 Hz = exactly 0 bins of 30000 Hz / 512
+   -> 0.000000 rpm = 0.000000 Hz = exactly 0 bins of 30000 Hz / 1024
+   -> 0.000000 rpm = 0.000000 Hz = exactly 0 bins of 30000 Hz / 2048
+   -> 0.000000 rpm = 0.000000 Hz = exactly 0 bins of 30000 Hz / 4096
+   -> 0.000000 rpm = 0.000000 Hz = exactly 0 bins of 30000 Hz / 8192
+   -> 0.000000 rpm = 0.000000 Hz = exactly 0 bins of 30000 Hz / 16384
+   -> 0.000000 rpm = 0.000000 Hz = exactly 0 bins of 30000 Hz / 32768
+
+SHOT 3  ops status ok; ball 84.01 mph, club 78.32421497548827 mph
+   spin_rpm               0
+   confidence             0
+   snr                    0.0
+   quality                "Ball signal too short (0 samples, need 128)"
+   method                 "multitaper_ungated"
+   multipath_fade_hz      null
+   modulation_depth       null
+   peak_freq_hz           null
+   seam_cycles            null
+   at_lower_rail          false
+   at_upper_rail          false
+   candidates             []
+   phase_method           null
+   phase_rpm              null
+   phase_snr              null
+   phase_agreement_pct    null
+   phase_confirmed        false
+   rejection_reason       "Ball signal too short (0 samples, need 128)"
+   -> 0.000000 rpm = 0.000000 Hz = exactly 0 bins of 30000 Hz / 128
+   -> 0.000000 rpm = 0.000000 Hz = exactly 0 bins of 30000 Hz / 256
+   -> 0.000000 rpm = 0.000000 Hz = exactly 0 bins of 30000 Hz / 512
+   -> 0.000000 rpm = 0.000000 Hz = exactly 0 bins of 30000 Hz / 1024
+   -> 0.000000 rpm = 0.000000 Hz = exactly 0 bins of 30000 Hz / 2048
+   -> 0.000000 rpm = 0.000000 Hz = exactly 0 bins of 30000 Hz / 4096
+   -> 0.000000 rpm = 0.000000 Hz = exactly 0 bins of 30000 Hz / 8192
+   -> 0.000000 rpm = 0.000000 Hz = exactly 0 bins of 30000 Hz / 16384
+   -> 0.000000 rpm = 0.000000 Hz = exactly 0 bins of 30000 Hz / 32768
+
+SHOT 4  ops status ok; ball 75.86 mph, club 79.66831226835939 mph
+   spin_rpm               2252.197265625
+   confidence             0.59
+   snr                    43.59897344299253
+   quality                "experimental"
+   method                 "multitaper_ungated"
+   multipath_fade_hz      25.0
+   modulation_depth       0.5341979932552721
+   peak_freq_hz           37.53662109375
+   seam_cycles            2.8577880859375
+   at_lower_rail          false
+   at_upper_rail          false
+   candidates             [{"rank": 1, "rpm": 2252.197265625, "freq_hz": 37.53662109375, "relative_magnitude": 1.0, "snr": 43.59897344299253, "at_lower_rail": false, "at_upper_rail": false, "expected_spin_error_pct": null, "selected": true}]
+   phase_method           null
+   phase_rpm              null
+   phase_snr              null
+   phase_agreement_pct    null
+   phase_confirmed        false
+   rejection_reason       null
+   -> 2252.197266 rpm = 37.536621 Hz = exactly 41 bins of 30000 Hz / 32768
+
+identical spin values: shots 1 and 4 (2252.197266 rpm), shots 2 and 3 (0.000000 rpm)

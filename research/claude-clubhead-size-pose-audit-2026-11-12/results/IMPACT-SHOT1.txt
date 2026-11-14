@@ -1,0 +1,35 @@
+SHOT 1 IMPACT POINT ON THE PLACED 3-D CLUB (research reading; development shot; not validated)
+contact instant 158.115 ms: f43 is 2.438 ms before, f44 1.179 ms after; resting ball (185.63, 95.72) px, radius 11.90 px
+supplied angles: face +1.40, loft 26.65, roll -3.52 deg; size 0.919
+   f43 AUTO: shaft residual 0.06 px, top-edge residual 0.46 px over 19 columns. TRACE anchor is (-4.5, -1.1) mm from it.
+   f44 AUTO  head edge: 17 columns with the cavity (< 46 DN) under them, shaft residual 0.50 px, edge residual 2.16 px, face centre at (175.2, 104.8) px | shaft only: hosel length 62.4 mm, face centre at (174.6, 102.3) px | the two differ by (+0.6, +2.5) px
+   f44 TRACE head edge: 19 columns with the cavity (< 46 DN) under them, shaft residual 0.37 px, edge residual 2.46 px, face centre at (177.2, 104.1) px | shaft only: hosel length 61.2 mm, face centre at (176.5, 101.7) px | the two differ by (+0.8, +2.4) px
+   f42 NOT used: at the supplied angles its top edge misses the model by 5.3 px rms (15 columns): 6 ms out the head is turned and lofted differently
+   ferrule moved (+15.6, +5.0) px from f43 to f44
+
+   anchor  f44 placement, interpolation               toe-ward of centre   up from centre   from the toe tip   above the leading edge   face-plane gap to the ball in depth
+   AUTO    f44 by head edge, linear                   +24.7 mm              +5.0 mm         15.9 mm            27.6 mm                   +6.6 mm
+   AUTO    f44 by head edge, slowed 0.83              +23.8 mm              +5.4 mm         16.8 mm            28.0 mm                   +2.7 mm
+   AUTO    f44 by shaft only, linear                  +25.6 mm              +1.6 mm         15.0 mm            24.2 mm                   +5.2 mm
+   AUTO    f44 by shaft only, slowed 0.83             +24.8 mm              +1.8 mm         15.9 mm            24.5 mm                   +1.3 mm
+   TRACE   f44 by head edge, linear                   +23.8 mm              +3.5 mm         16.9 mm            26.1 mm                   +6.0 mm
+   TRACE   f44 by head edge, slowed 0.83              +22.5 mm              +3.9 mm         18.1 mm            26.5 mm                   +2.1 mm
+   TRACE   f44 by shaft only, linear                  +24.8 mm              +0.3 mm         15.8 mm            22.9 mm                   +4.7 mm
+   TRACE   f44 by shaft only, slowed 0.83             +23.6 mm              +0.5 mm         17.0 mm            23.1 mm                   +0.8 mm
+
+   all eight: toe-ward +22.5 .. +25.6 mm (median +24.3); up +0.3 .. +5.4 mm (median +2.7)
+   trace anchor only (four): toe-ward +22.5 .. +24.8 mm; up +0.3 .. +3.9 mm
+   face centre on this size: 40.6 mm from the toe tip, 22.6 mm above the leading edge
+
+SENSITIVITY (automatic anchor, f44 by head edge, slowed), everything re-placed from the pixels:
+   loft +6  moves the reading by  +0.6 mm toe-ward,  -3.5 mm up
+   loft -6  moves the reading by  -0.9 mm toe-ward,  +3.2 mm up
+   face +6  moves the reading by  +1.0 mm toe-ward,  +0.5 mm up
+   face -6  moves the reading by  +0.2 mm toe-ward,  -0.4 mm up
+   roll +4  moves the reading by  -5.0 mm toe-ward,  -1.0 mm up
+   roll -4  moves the reading by  +4.5 mm toe-ward,  +1.5 mm up
+   contact +0.14 ms moves it by  -0.8 mm toe-ward,  +0.4 mm up
+   contact -0.14 ms moves it by  +0.8 mm toe-ward,  -0.4 mm up
+   1 px of placement error on either frame is 1.7 to 1.8 mm
+
+FOR COMPARISON  application 0fa9870b: +32.7 mm toe-ward (+-12.3), -10.8 mm up (+-4.0).  Codex's contact-pose trial: about +36 toe-ward, +10 up.

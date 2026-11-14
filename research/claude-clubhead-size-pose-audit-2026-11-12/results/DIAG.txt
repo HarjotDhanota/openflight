@@ -1,0 +1,114 @@
+M1  GENERIC OUTLINE LEDGER (recomputed from club_outline_reference.json, category iron)
+  points 205; u -61.30 .. 44.21, v -24.61 .. 33.48 -> box 105.51 x 58.09 mm INCLUDING the hosel stub
+  face centre: 44.21 mm from the toe extreme, 24.61 mm above the lowest point (JSON: 44.24, 24.60)
+  toe peak: 58.1 mm above the sole, 19.9 mm heel-ward of the toe extreme
+  top line 60 mm from the toe: 42.4 mm above the sole
+  top line 70 mm from the toe: 37.3 mm above the sole
+  top line 74 mm from the toe: 35.6 mm above the sole
+  top line slope between 30 and 74 mm from the toe: 24.9 deg falling toward the heel (drawing: (30,-56.07) to (74,-35.65) = 24.9 deg)
+  heel end of the head proper (drawing node 0): 84.87 mm from the toe; blade length quoted by the source table: 79.4 mm
+  hosel: axis meets the ground line 78.2 mm from the toe; drawn at 58.4 deg = atan(tan 62.3 x cos 31.4), i.e. the 62.3 deg lie seen ALONG THE FACE NORMAL of a 31.4 deg loft
+  outline's heel-most point 105.5 mm from the toe at 31.9 mm above the sole: the hosel tube's outer edge, 40 mm up the axis
+  score lines (not in the outline): longest 53.6 mm, toe margin 17.44 mm
+  lineage: ui/src/components/panel/faceImpact.ts IRON.head (svg mm, +x heel, +y down), spline-flattened 12 points per curve -> JSON (commit bf545398, later fillet edits 359eaab6, 466c2e09); source table research/club-models/README.md section 6 (45 7-irons, 10 brands)
+  units: one number scale for both axes (mm); no separate x/y factor exists anywhere between the drawing and the projector
+
+M2  IS THE SUPPLIED ORIENTATION APPLIED TO THE DRAWN MODEL?
+  shot 1: supplied face +1.40, loft 26.65, roll -3.52 deg. My projection against the application's own outline pixels: max 0.00008 px
+     loft set to 0  outline moves by up to  1.89 px (rms 0.92); box 62.5 x 34.1 px against 62.8 x 30.6 supplied
+     face set to 0  outline moves by up to  0.23 px (rms 0.09); box 62.9 x 30.6 px against 62.8 x 30.6 supplied
+     roll set to 0  outline moves by up to  2.00 px (rms 1.03); box 62.9 x 31.0 px against 62.8 x 30.6 supplied
+     all three 0    outline moves by up to  2.94 px (rms 1.25); box 62.8 x 34.6 px against 62.8 x 30.6 supplied
+  shot 3: supplied face +4.89, loft 21.56, roll +1.57 deg. My projection against the application's own outline pixels: max 0.00004 px
+     loft set to 0  outline moves by up to  1.00 px (rms 0.43); box 48.8 x 27.1 px against 48.8 x 25.2 supplied
+     face set to 0  outline moves by up to  0.44 px (rms 0.20); box 48.6 x 25.2 px against 48.8 x 25.2 supplied
+     roll set to 0  outline moves by up to  0.72 px (rms 0.37); box 48.7 x 24.9 px against 48.8 x 25.2 supplied
+     all three 0    outline moves by up to  1.09 px (rms 0.56); box 48.5 x 26.7 px against 48.8 x 25.2 supplied
+  shot 4: supplied face +8.45, loft 32.90, roll -1.00 deg. My projection against the application's own outline pixels: max 0.00003 px
+     loft set to 0  outline moves by up to  2.41 px (rms 1.05); box 51.5 x 28.2 px against 51.6 x 23.9 supplied
+     face set to 0  outline moves by up to  1.26 px (rms 0.52); box 51.4 x 23.8 px against 51.6 x 23.9 supplied
+     roll set to 0  outline moves by up to  0.44 px (rms 0.23); box 51.6 x 24.0 px against 51.6 x 23.9 supplied
+     all three 0    outline moves by up to  2.57 px (rms 1.04); box 51.4 x 28.3 px against 51.6 x 23.9 supplied
+  -> the angles ARE applied. Tilting a flat face outline by the loft only squeezes its height by cos(loft): about 10 to 16 %; the picture barely changes.
+
+M3  RIGID-DESCENT CHECK (model-free; mm at the supplied depth, and in ball diameters)
+  shot 1 f41  -9.67 ms  depth 1451 mm | ferrule row   45.0 | toe-side top row  40.5 | lowest visible row  78.5 | ferrule->top  -6.5 mm (-0.19 ball) | ferrule->bottom  48.6 mm (1.41 ball) | visible height 55.1 mm (1.60 ball) | top is  97.4 mm above, bottom -42.3 mm below the resting ball's bottom row 107.6
+  shot 1 f42  -6.05 ms  depth 1565 mm | ferrule row   64.0 | toe-side top row  64.5 | lowest visible row  99.5 | ferrule->top   0.8 mm (0.02 ball) | ferrule->bottom  55.6 mm (1.49 ball) | visible height 54.8 mm (1.47 ball) | top is  67.5 mm above, bottom -12.7 mm below the resting ball's bottom row 107.6
+  shot 1 f43  -2.44 ms  depth 1679 mm | ferrule row   76.0 | toe-side top row  79.5 | lowest visible row 110.5 | ferrule->top   5.9 mm (0.15 ball) | ferrule->bottom  57.9 mm (1.45 ball) | visible height 52.1 mm (1.30 ball) | top is  47.2 mm above, bottom  4.8 mm below the resting ball's bottom row 107.6
+  shot 1 f44  +1.18 ms  depth 1793 mm | ferrule row   81.0 | toe-side top row  71.5 | lowest visible row 109.5 | ferrule->top -17.0 mm (-0.40 ball) | ferrule->bottom  51.1 mm (1.20 ball) | visible height 68.2 mm (1.60 ball) | top is  64.8 mm above, bottom  3.4 mm below the resting ball's bottom row 107.6
+     f41 -> f42: ferrule moved down  28.7 mm; ferrule->top changed  +7.3 mm; ferrule->bottom changed  +7.0 mm : rule not met
+     f42 -> f43: ferrule moved down  19.5 mm; ferrule->top changed  +5.1 mm; ferrule->bottom changed  +2.4 mm : rule not met
+     f43 -> f44: ferrule moved down   8.7 mm; ferrule->top changed -22.9 mm; ferrule->bottom changed  -6.8 mm : rule not met
+  shot 3 f41  -9.02 ms  depth 1930 mm | ferrule row   43.5 | toe-side top row  41.5 | lowest visible row  72.5 | ferrule->top  -3.9 mm (-0.11 ball) | ferrule->bottom  56.0 mm (1.55 ball) | visible height 59.8 mm (1.65 ball) | top is  83.9 mm above, bottom -24.1 mm below the resting ball's bottom row 85.0
+  shot 3 f42  -5.40 ms  depth 2053 mm | ferrule row   59.5 | toe-side top row  62.5 | lowest visible row  90.5 | ferrule->top   6.2 mm (0.16 ball) | ferrule->bottom  63.6 mm (1.65 ball) | visible height 57.5 mm (1.49 ball) | top is  46.2 mm above, bottom 11.3 mm below the resting ball's bottom row 85.0
+  shot 3 f43  -1.78 ms  depth 2176 mm | ferrule row   68.5 | toe-side top row  59.5 | lowest visible row  89.5 | ferrule->top -19.6 mm (-0.48 ball) | ferrule->bottom  45.7 mm (1.12 ball) | visible height 65.3 mm (1.60 ball) | top is  55.5 mm above, bottom  9.8 mm below the resting ball's bottom row 85.0
+  shot 3 f44  +1.83 ms  depth 2299 mm | ferrule row   67.0 | toe-side top row  45.5 | lowest visible row  88.5 | ferrule->top -49.4 mm (-1.15 ball) | ferrule->bottom  49.4 mm (1.15 ball) | visible height 98.9 mm (2.29 ball) | top is  90.8 mm above, bottom  8.1 mm below the resting ball's bottom row 85.0
+     f41 -> f42: ferrule moved down  31.9 mm; ferrule->top changed +10.0 mm; ferrule->bottom changed  +7.7 mm : rule not met
+     f42 -> f43: ferrule moved down  19.0 mm; ferrule->top changed -25.7 mm; ferrule->bottom changed -17.9 mm : rule not met
+     f43 -> f44: ferrule moved down  -3.4 mm; ferrule->top changed -29.8 mm; ferrule->bottom changed  +3.7 mm : rule not met
+  shot 4 f42  -7.77 ms  depth 1797 mm | ferrule row   44.0 | toe-side top row  43.5 | lowest visible row  76.5 | ferrule->top  -0.9 mm (-0.02 ball) | ferrule->bottom  58.4 mm (1.61 ball) | visible height 59.3 mm (1.64 ball) | top is  86.0 mm above, bottom -26.7 mm below the resting ball's bottom row 91.4
+  shot 4 f43  -4.15 ms  depth 1924 mm | ferrule row   62.0 | toe-side top row  65.5 | lowest visible row  95.5 | ferrule->top   6.7 mm (0.17 ball) | ferrule->bottom  64.5 mm (1.66 ball) | visible height 57.7 mm (1.49 ball) | top is  49.8 mm above, bottom  7.9 mm below the resting ball's bottom row 91.4
+  shot 4 f44  -0.53 ms  depth 2052 mm | ferrule row   71.5 | toe-side top row  63.5 | lowest visible row  94.5 | ferrule->top -16.4 mm (-0.40 ball) | ferrule->bottom  47.2 mm (1.14 ball) | visible height 63.6 mm (1.54 ball) | top is  57.2 mm above, bottom  6.4 mm below the resting ball's bottom row 91.4
+  shot 4 f45  +3.08 ms  depth 2179 mm | ferrule row   71.5 | toe-side top row  45.5 | lowest visible row  93.5 | ferrule->top -56.6 mm (-1.29 ball) | ferrule->bottom  47.9 mm (1.09 ball) | visible height 104.6 mm (2.38 ball) | top is 100.0 mm above, bottom  4.6 mm below the resting ball's bottom row 91.4
+     f42 -> f43: ferrule moved down  33.5 mm; ferrule->top changed  +7.6 mm; ferrule->bottom changed  +6.1 mm : rule not met
+     f43 -> f44: ferrule moved down  18.9 mm; ferrule->top changed -23.1 mm; ferrule->bottom changed -17.3 mm : rule not met
+     f44 -> f45: ferrule moved down   0.0 mm; ferrule->top changed -40.2 mm; ferrule->bottom changed  +0.7 mm : rule not met
+
+M4  SILHOUETTE REGISTRATION (XOR px^2 right of the hosel; translation re-optimised for every variant)
+  shot 1 IN-AIR f42 (depth 1565 mm, 1.57 mm/px), observed head 1026 px^2, rows 64.5 .. 99.5, toe x 167.5
+     translation only, full    window: XOR  216  overhang  209  uncovered    7  IoU 0.83 | shift -3.25, +1.50 px | model top row 65.5 (observed 64.5), model bottom row 98.4 (lowest visible 99.5: -1.7 mm), toe x 167.2 (observed 167.5)
+     translation only, visible window: XOR  216  overhang  186  uncovered   30  IoU 0.82 | shift -3.50, +3.25 px | model top row 67.2 (observed 64.5), model bottom row 100.2 (lowest visible 99.5: +1.1 mm), toe x 166.9 (observed 167.5)
+     variants, full window, XOR (change against supplied): size 0.90 159 (-26 %); size 0.95 170 (-21 %); size 0.85 171 (-20 %); loft +10 174 (-19 %); loft +20 205 (-5 %); supplied 216 (+0 %); roll -3 216 (+0 %); roll +3 221 (+3 %)
+     size sweep, full window: size 0.85 171; size 0.90 159; size 0.95 170; supplied 216; size 1.05 280; size 1.10 347; size 1.15 415
+     floor  5 DN: translation only XOR  134 IoU 0.89 shift -2.75, +1.75 px; observed rows 64.5 .. 99.5
+     floor 12 DN: translation only XOR  315 IoU 0.73 shift -4.00, +1.25 px; observed rows 65.5 .. 98.5
+  shot 1 NEAR f43 (depth 1679 mm, 1.68 mm/px), observed head 974 px^2, rows 79.5 .. 110.5, toe x 185.5
+     application's own pose:        XOR  300  overhang  208 (19 % of the model is not on the head)  uncovered   92  IoU 0.75
+     translation only, full    window: XOR  161  overhang  151  uncovered   10  IoU 0.86 | shift +1.25, +3.00 px | model top row 79.5 (observed 79.5), model bottom row 110.0 (lowest visible 110.5: -0.8 mm), toe x 184.8 (observed 185.5)
+     translation only, visible window: XOR  139  overhang  107  uncovered   32  IoU 0.87 | shift +1.50, +5.00 px | model top row 81.5 (observed 79.5), model bottom row 112.0 (lowest visible 110.5: +2.5 mm), toe x 185.1 (observed 185.5)
+     variants, visible window, XOR (change against supplied): size 0.90 110 (-21 %); size 0.85 121 (-13 %); size 0.95 124 (-11 %); roll +6 125 (-10 %); roll +3 131 (-6 %); loft +10 134 (-4 %); face -10 135 (-3 %); loft -10 136 (-2 %)
+     size sweep, visible window: size 0.85 121; size 0.90 110; size 0.95 124; supplied 139; size 1.05 152; size 1.10 163; size 1.15 172
+     floor  5 DN: translation only XOR  110 IoU 0.90 shift +1.75, +3.25 px; observed rows 79.5 .. 111.5
+     floor 12 DN: translation only XOR  153 IoU 0.85 shift +1.50, +5.75 px; observed rows 80.5 .. 109.5
+  shot 3 IN-AIR f42 (depth 2053 mm, 2.05 mm/px), observed head 711 px^2, rows 62.5 .. 90.5, toe x 159.5
+     translation only, full    window: XOR   82  overhang   70  uncovered   11  IoU 0.90 | shift +1.00, -4.50 px | model top row 62.7 (observed 62.5), model bottom row 89.4 (lowest visible 90.5: -2.3 mm), toe x 159.0 (observed 159.5)
+     translation only, visible window: XOR   80  overhang   62  uncovered   17  IoU 0.90 | shift +0.75, -3.75 px | model top row 63.5 (observed 62.5), model bottom row 90.1 (lowest visible 90.5: -0.7 mm), toe x 158.8 (observed 159.5)
+     variants, full window, XOR (change against supplied): size 0.95 62 (-24 %); loft +10 64 (-22 %); size 0.90 70 (-14 %); roll -3 78 (-5 %); supplied 82 (+0 %); roll -6 82 (+1 %); face -10 89 (+9 %); roll +3 90 (+10 %)
+     size sweep, full window: size 0.85 101; size 0.90 70; size 0.95 62; supplied 82; size 1.05 114; size 1.10 154; size 1.15 195
+     floor  5 DN: translation only XOR   55 IoU 0.93 shift +1.25, -4.25 px; observed rows 61.5 .. 90.5
+     floor 12 DN: translation only XOR  123 IoU 0.84 shift +0.25, -4.75 px; observed rows 62.5 .. 89.5
+  shot 3 NEAR f43 (depth 2176 mm, 2.18 mm/px), observed head 984 px^2, rows 59.5 .. 89.5, toe x 165.5
+     application's own pose:        XOR  230  overhang   10 ( 1 % of the model is not on the head)  uncovered  220  IoU 0.77
+     translation only, full    window: XOR  222  overhang    4  uncovered  218  IoU 0.78 | shift -0.25, -2.00 px | model top row 60.6 (observed 59.5), model bottom row 85.8 (lowest visible 89.5: -8.1 mm), toe x 163.8 (observed 165.5)
+     translation only, visible window: XOR  222  overhang    4  uncovered  218  IoU 0.78 | shift -0.25, -2.00 px | model top row 60.6 (observed 59.5), model bottom row 85.8 (lowest visible 89.5: -8.1 mm), toe x 163.8 (observed 165.5)
+     variants, visible window, XOR (change against supplied): size 1.15 96 (-57 %); size 1.10 129 (-42 %); size 1.05 171 (-23 %); loft -10 183 (-18 %); face +30 200 (-10 %); face +20 204 (-8 %); face -10 216 (-3 %); face +10 217 (-2 %)
+     size sweep, visible window: size 0.85 374; size 0.90 324; size 0.95 272; supplied 222; size 1.05 171; size 1.10 129; size 1.15 96
+     floor  5 DN: translation only XOR  308 IoU 0.72 shift +3.00, -1.25 px; observed rows 57.5 .. 90.5
+     floor 12 DN: translation only XOR  189 IoU 0.79 shift -2.50, -2.25 px; observed rows 59.5 .. 89.5
+  shot 4 IN-AIR f43 (depth 1924 mm, 1.92 mm/px), observed head 804 px^2, rows 65.5 .. 95.5, toe x 184.5
+     translation only, full    window: XOR   77  overhang    4  uncovered   73  IoU 0.90 | shift +0.50, +10.25 px | model top row 67.3 (observed 65.5), model bottom row 92.8 (lowest visible 95.5: -5.1 mm), toe x 184.4 (observed 184.5)
+     translation only, visible window: XOR   77  overhang    4  uncovered   73  IoU 0.90 | shift +0.50, +10.25 px | model top row 67.3 (observed 65.5), model bottom row 92.8 (lowest visible 95.5: -5.1 mm), toe x 184.4 (observed 184.5)
+     variants, full window, XOR (change against supplied): loft -10 34 (-57 %); size 1.05 43 (-44 %); size 1.10 46 (-40 %); face +10 71 (-8 %); size 1.15 71 (-8 %); roll +6 75 (-3 %); roll +3 76 (-2 %); supplied 77 (+0 %)
+     size sweep, full window: size 0.85 201; size 0.90 157; size 0.95 116; supplied 77; size 1.05 43; size 1.10 46; size 1.15 71
+     floor  5 DN: translation only XOR  123 IoU 0.86 shift +1.25, +11.25 px; observed rows 64.5 .. 95.5
+     floor 12 DN: translation only XOR   66 IoU 0.90 shift +0.25, +9.50 px; observed rows 65.5 .. 94.5
+  shot 4 NEAR f44 (depth 2052 mm, 2.05 mm/px), observed head 1007 px^2, rows 63.5 .. 94.5, toe x 188.5
+     application's own pose:        XOR  498  overhang  121 (16 % of the model is not on the head)  uncovered  377  IoU 0.56
+     translation only, full    window: XOR  265  overhang   21  uncovered  244  IoU 0.74 | shift +2.50, +7.25 px | model top row 68.4 (observed 63.5), model bottom row 92.3 (lowest visible 94.5: -4.6 mm), toe x 188.5 (observed 188.5)
+     translation only, visible window: XOR  265  overhang   21  uncovered  244  IoU 0.74 | shift +2.50, +7.25 px | model top row 68.4 (observed 63.5), model bottom row 92.3 (lowest visible 94.5: -4.6 mm), toe x 188.5 (observed 188.5)
+     variants, visible window, XOR (change against supplied): size 1.15 149 (-44 %); size 1.10 186 (-30 %); loft -10 205 (-23 %); size 1.05 224 (-15 %); roll +6 237 (-10 %); roll +3 250 (-5 %); face +20 257 (-3 %); face +10 258 (-3 %)
+     size sweep, visible window: size 0.85 405; size 0.90 352; size 0.95 306; supplied 265; size 1.05 224; size 1.10 186; size 1.15 149
+     floor  5 DN: translation only XOR  345 IoU 0.70 shift +6.00, +7.00 px; observed rows 62.5 .. 95.5
+     floor 12 DN: translation only XOR  201 IoU 0.79 shift +2.50, +7.75 px; observed rows 64.5 .. 93.5
+
+M5  SHAFT AXIS AFTER REGISTRATION (observed ridge line minus the model's axis, at the head's top row; + = observed toe-ward of the model)
+  shot 1 IN-AIR f42: observed axis 113.6 deg from horizontal, model 65.4 deg; offset at row 64.5: +12.0 px = +18.8 mm (after the registration shift)
+  shot 1 NEAR f43: observed axis 114.4 deg from horizontal, model 65.4 deg; offset at row 79.5: +8.4 px = +14.1 mm (after the registration shift)
+  shot 3 IN-AIR f42: observed axis 116.0 deg from horizontal, model 60.8 deg; offset at row 62.5: +9.1 px = +18.8 mm (after the registration shift)
+  shot 3 NEAR f43: observed axis 116.6 deg from horizontal, model 60.8 deg; offset at row 59.5: +1.8 px = +3.8 mm (after the registration shift)
+  shot 4 IN-AIR f43: observed axis 116.6 deg from horizontal, model 63.2 deg; offset at row 65.5: +10.8 px = +20.8 mm (after the registration shift)
+  shot 4 NEAR f44: observed axis 116.6 deg from horizontal, model 63.1 deg; offset at row 63.5: +2.0 px = +4.2 mm (after the registration shift)
+  3-D note (deduction): the drawing places the shaft point of true height h at face height h*cos(31.4); the projector then lowers it again by cos(dynamic loft).
+     dynamic loft 21.6: the model's hosel foot (99.9 mm from the toe) stands 32.7 mm above the sole; the real axis is there 95.4 mm from the toe -> the model's axis is 4.5 mm too far heel-ward
+     dynamic loft 26.7: the model's hosel foot (99.9 mm from the toe) stands 31.4 mm above the sole; the real axis is there 94.7 mm from the toe -> the model's axis is 5.2 mm too far heel-ward
+     dynamic loft 32.9: the model's hosel foot (99.9 mm from the toe) stands 29.6 mm above the sole; the real axis is there 93.7 mm from the toe -> the model's axis is 6.2 mm too far heel-ward

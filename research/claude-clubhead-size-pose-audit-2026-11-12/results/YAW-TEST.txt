@@ -1,0 +1,6 @@
+shot 1 f43, owner's trace; supplied face +1.4, loft 26.7, roll -3.5; TS4 model at true size
+   axis 80.1 (spec), supplied angles      boundary rms 1.21 px, overlap 0.88 | face  +1.4, loft 26.7, roll -3.5
+   axis 75.0, supplied angles             boundary rms 0.74 px, overlap 0.94 | face  +1.4, loft 26.7, roll -3.5
+   axis 80.1, FACE ANGLE free             boundary rms 0.85 px, overlap 0.92 | face +11.7, loft 26.7, roll -3.5
+   axis 80.1, face + loft + roll free     boundary rms 0.59 px, overlap 0.94 | face +12.7, loft 34.1, roll -1.3
+   axis 75.0, face + loft + roll free     boundary rms 0.49 px, overlap 0.95 | face  +3.5, loft 33.5, roll -1.9

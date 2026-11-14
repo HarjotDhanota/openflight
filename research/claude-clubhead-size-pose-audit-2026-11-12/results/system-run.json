@@ -1,0 +1,216 @@
+{
+ "1": {
+  "shot": 1,
+  "status": "read",
+  "sensors": {
+   "ball_speed_mph_radar": 81.66409309716798,
+   "club_speed_mph_radar": 72.05176094208986,
+   "club_path_deg": 10.09,
+   "dynamic_lie_deg": 65.8235341722002
+  },
+  "fusion": {
+   "camera_pitch_deg": 2.184568072067391,
+   "ball_speed_mps": 38.572156831321664,
+   "launch_vertical_deg": 15.109722495446091,
+   "launch_horizontal_deg": 8.5172718521648,
+   "attack_deg": -5.846743813554118,
+   "attack_how": "last chord -8.7 moved 3.85 ms to contact at 1.3 deg/ms (3 frames)",
+   "attack_frames": [
+    41,
+    42,
+    43
+   ],
+   "club_path_deg": 10.09,
+   "mid_contact_ms_after_rest_frame": 2.0432717111489183,
+   "ball_frames": [
+    44,
+    45,
+    46
+   ],
+   "face_deg": 8.126847248415084,
+   "dynamic_loft_deg": 19.92203820283,
+   "roll_deg": -3.5235341722002005
+  },
+  "impact": {
+   "from_toe": 13.0965138972918,
+   "above_le": 22.842054092415765,
+   "variant": "hosel + top + toe",
+   "rim_mm": 4.908183102894247,
+   "rim_values": 26,
+   "top_columns": 19,
+   "toe_rows": 10,
+   "fit_rms_px": {
+    "shaft": 0.7820480486638545,
+    "top": 0.3741099944898047,
+    "toe": 2.097237212406228
+   },
+   "implied_ferrule_mm": 60.475,
+   "t_mid": 0.23477171114891704,
+   "frames": [
+    43,
+    44
+   ],
+   "after_contact_ms": 2.0432717111489183
+  }
+ },
+ "2": {
+  "shot": 2,
+  "status": "read",
+  "sensors": {
+   "ball_speed_mph_radar": 96.63244931323243,
+   "club_speed_mph_radar": 80.15707492031251,
+   "club_path_deg": 11.92,
+   "dynamic_lie_deg": 62.73587176994387
+  },
+  "fusion": {
+   "camera_pitch_deg": 2.1830177069344217,
+   "ball_speed_mps": 45.574291026590984,
+   "launch_vertical_deg": 17.3258383596012,
+   "launch_horizontal_deg": 8.670241456714441,
+   "attack_deg": -5.368165786485522,
+   "attack_how": "last chord -8.8 moved 4.28 ms to contact at 1.3 deg/ms (2 frames)",
+   "attack_frames": [
+    41,
+    42
+   ],
+   "club_path_deg": 11.92,
+   "mid_contact_ms_after_rest_frame": 2.4762733451802887,
+   "ball_frames": [
+    43,
+    44,
+    45
+   ],
+   "face_deg": 7.830113198708297,
+   "dynamic_loft_deg": 22.625874364688887,
+   "roll_deg": -0.4358717699438728
+  },
+  "impact": {
+   "from_toe": 42.03583585627673,
+   "above_le": 12.623300810067782,
+   "variant": "hosel + top + toe",
+   "rim_mm": 5.577157612548948,
+   "rim_values": 53,
+   "top_columns": 23,
+   "toe_rows": 4,
+   "fit_rms_px": {
+    "shaft": 0.48431961323782036,
+    "top": 0.8172109892166204,
+    "toe": 2.2840891085955506
+   },
+   "implied_ferrule_mm": 61.425000000000004,
+   "t_mid": 0.6677733451803073,
+   "frames": [
+    42,
+    43
+   ],
+   "after_contact_ms": 2.4762733451802887
+  }
+ },
+ "3": {
+  "shot": 3,
+  "status": "read",
+  "sensors": {
+   "ball_speed_mph_radar": 84.00608080444336,
+   "club_speed_mph_radar": 78.32421497548827,
+   "club_path_deg": 14.63,
+   "dynamic_lie_deg": 60.727938302575865
+  },
+  "fusion": {
+   "camera_pitch_deg": 2.0574711851168193,
+   "ball_speed_mps": 39.74649471094454,
+   "launch_vertical_deg": 18.379120423283666,
+   "launch_horizontal_deg": 8.706530235101527,
+   "attack_deg": -5.539729095921452,
+   "attack_how": "last chord -7.9 moved 3.40 ms to contact at 1.3 deg/ms (3 frames)",
+   "attack_frames": [
+    41,
+    42,
+    43
+   ],
+   "club_path_deg": 14.63,
+   "mid_contact_ms_after_rest_frame": 1.5947736691300918,
+   "ball_frames": [
+    44,
+    46
+   ],
+   "face_deg": 7.1270687122778265,
+   "dynamic_loft_deg": 24.05097440370821,
+   "roll_deg": 1.5720616974241324
+  },
+  "impact": {
+   "from_toe": 41.986252288572416,
+   "above_le": 31.022689075156812,
+   "variant": "hosel + top + toe",
+   "rim_mm": 6.263526982871091,
+   "rim_values": 17,
+   "top_columns": 6,
+   "toe_rows": 6,
+   "fit_rms_px": {
+    "shaft": 0.6842990332123684,
+    "top": 0.6596958071372747,
+    "toe": 1.2451457688390462
+   },
+   "implied_ferrule_mm": 65.0,
+   "t_mid": -0.21372633086992784,
+   "frames": [
+    43,
+    44
+   ],
+   "after_contact_ms": 1.5947736691300918
+  }
+ },
+ "4": {
+  "shot": 4,
+  "status": "read",
+  "sensors": {
+   "ball_speed_mph_radar": 75.86003660522461,
+   "club_speed_mph_radar": 79.66831226835939,
+   "club_path_deg": 10.24,
+   "dynamic_lie_deg": 63.29811270148952
+  },
+  "fusion": {
+   "camera_pitch_deg": 2.105116434913507,
+   "ball_speed_mps": 37.844242459961905,
+   "launch_vertical_deg": 25.575916843527885,
+   "launch_horizontal_deg": 10.249063157548989,
+   "attack_deg": -6.421168501153144,
+   "attack_how": "quadratic tangent at mid-contact, 4 frames, turn +1.33 deg/ms",
+   "attack_frames": [
+    41,
+    42,
+    43,
+    44
+   ],
+   "club_path_deg": 10.24,
+   "mid_contact_ms_after_rest_frame": 0.5531449891340685,
+   "ball_frames": [
+    45,
+    47
+   ],
+   "face_deg": 10.252072013551038,
+   "dynamic_loft_deg": 34.013675736170725,
+   "roll_deg": -0.998112701489525
+  },
+  "impact": {
+   "from_toe": 64.19280256779196,
+   "above_le": 26.516605304434,
+   "variant": "hosel + top + toe",
+   "rim_mm": 5.717716651126798,
+   "rim_values": 24,
+   "top_columns": 15,
+   "toe_rows": 7,
+   "fit_rms_px": {
+    "shaft": 0.6441382012559149,
+    "top": 0.44273246690423934,
+    "toe": 2.1207872550455464
+   },
+   "implied_ferrule_mm": 59.175000000000004,
+   "t_mid": -1.2523550108659518,
+   "frames": [
+    44,
+    45
+   ],
+   "after_contact_ms": 0.5531449891340685
+  }
+ }
+}

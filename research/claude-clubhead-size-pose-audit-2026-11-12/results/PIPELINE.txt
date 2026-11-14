@@ -1,0 +1,68 @@
+SHOT 1
+   ball f44 (+1.18 ms): moved +4.43 px right; centre +17.82, top edge +9.44 px up; 31 rays, rms 0.29 px
+   ball f45 (+4.80 ms): moved +14.49 px right; centre +30.82, top edge +29.22 px up; 41 rays, rms 0.34 px
+   ball f46 (+8.41 ms): moved +22.89 px right; centre +48.17, top edge +46.31 px up; 41 rays, rms 0.25 px
+   ball track, pixels + radar: mid-contact -0.43 ms from the application's (+-0.10); 37.0 m/s; launch 17.8 deg; worst pixel miss 0.39
+   ball track, pixels only: mid-contact -0.28 ms from the application's (+-0.15); 54.4 m/s; launch 13.0 deg; worst pixel miss 0.19
+SHOT 3
+   ball f44 (+1.83 ms): moved +0.57 px right; centre +12.55, top edge +11.45 px up; 31 rays, rms 0.48 px
+   ball f45 (+5.45 ms): moved +0.73 px right; centre +31.37, top edge +30.45 px up; 41 rays, rms 0.21 px
+   ball f46 (+9.07 ms): moved +1.53 px right; centre +48.72, top edge +47.43 px up; 41 rays, rms 0.25 px
+   ball track, pixels + radar: mid-contact -0.19 ms from the application's (+-0.12); 37.7 m/s; launch 21.4 deg; worst pixel miss 0.22
+   ball track, pixels only: mid-contact -0.12 ms from the application's (+-0.20); 45.4 m/s; launch 18.3 deg; worst pixel miss 0.23
+SHOT 4
+   ball f45 (+3.08 ms): moved +2.91 px right; centre +25.65, top edge +23.68 px up; 31 rays, rms 0.30 px
+   ball f46 (+6.70 ms): moved +5.61 px right; centre +50.47, top edge +49.21 px up; 41 rays, rms 0.31 px
+   ball f47 (+10.32 ms): moved +8.45 px right; centre +73.82, top edge +72.37 px up; 16 rays, rms 0.23 px
+   ball track, pixels + radar: mid-contact -0.01 ms from the application's (+-0.11); 34.2 m/s; launch 30.3 deg; worst pixel miss 0.25
+   ball track, pixels only: mid-contact +0.12 ms from the application's (+-0.20); 42.8 m/s; launch 25.1 deg; worst pixel miss 0.17
+
+OWNER'S TRACE, shot 1 f43 (boundary rms px, overlap) at the frame's working depth
+   generic, moved + one size number: 0.66 px, 0.93; size 0.923
+   generic at size 1.000, moved only: 1.71 px, 0.84
+   TS4 at its true size, moved only:  1.21 px, 0.88
+   TS4, moved + one size number:      0.69 px, 0.92; size 0.943 (1.000 would mean the spec scale and the camera depth agree)
+   TS4 at true size, shaft axis meeting the ground at x mm from the toe (spec blade length 80.1 if it runs to the hosel centreline, 72.5 if to the hosel's outer edge):
+      x = 70.0: 1.01 px, 0.90
+      x = 72.5: 0.80 px, 0.93
+      x = 75.0: 0.74 px, 0.94
+      x = 77.5: 0.93 px, 0.91
+      x = 80.1: 1.21 px, 0.88
+      x = 82.5: 1.58 px, 0.84
+   -> taken: 75.0 mm (lowest). With it, a free size comes out 0.976 (0.60 px)
+
+MODEL generic iron x 0.923
+   this club's hosel length on this model (ground point to the ferrule, on shot 1's traced frame): 61.2 mm
+   shot 1: frame 43 is 2.01 ms before mid-contact, frame 44 1.61 ms after | before-frame fit: shaft 0.01 px, top edge 0.43 px | after-frame: 17 edge columns, shaft 0.49, edge 2.13 px
+      impact (ball-track instant, 8 variants): 10.1 .. 13.8 mm from the toe (median 12.1); 22.5 .. 26.8 mm above the leading edge (median 24.8)
+      with the application's instant: median 15.4 mm from the toe, 25.9 mm above the leading edge
+      FERRULE variant (shaft line + ferrule on both frames, hosel length from shot 1): 11.9 mm from the toe, 22.1 mm above the leading edge
+      leading edge at mid-contact: 10.7 mm below the ball's bottom
+   shot 3: frame 43 is 1.60 ms before mid-contact, frame 44 2.02 ms after | before-frame fit: shaft 0.50 px, top edge 0.28 px | after-frame: 0 edge columns, shaft 0.00, edge 0.00 px
+      impact (ball-track instant, 4 variants): 42.2 .. 42.3 mm from the toe (median 42.2); 38.6 .. 38.9 mm above the leading edge (median 38.8)
+      with the application's instant: median 42.5 mm from the toe, 38.6 mm above the leading edge
+      FERRULE variant (shaft line + ferrule on both frames, hosel length from shot 1): 37.4 mm from the toe, 28.8 mm above the leading edge
+      leading edge at mid-contact: 22.4 mm below the ball's bottom
+   shot 4: frame 44 is 0.52 ms before mid-contact, frame 45 3.09 ms after | before-frame fit: shaft 0.11 px, top edge 0.44 px | after-frame: 0 edge columns, shaft 0.00, edge 0.00 px
+      impact (ball-track instant, 4 variants): 64.0 .. 64.2 mm from the toe (median 64.1); 31.6 .. 31.6 mm above the leading edge (median 31.6)
+      with the application's instant: median 64.1 mm from the toe, 31.6 mm above the leading edge
+      FERRULE variant (shaft line + ferrule on both frames, hosel length from shot 1): 61.9 mm from the toe, 26.7 mm above the leading edge
+      leading edge at mid-contact: 17.1 mm below the ball's bottom
+
+MODEL TS4 7-iron (research), axis at 75.0
+   this club's hosel length on this model (ground point to the ferrule, on shot 1's traced frame): 61.0 mm
+   shot 1: frame 43 is 2.01 ms before mid-contact, frame 44 1.61 ms after | before-frame fit: shaft 0.23 px, top edge 1.00 px | after-frame: 16 edge columns, shaft 0.30, edge 2.50 px
+      impact (ball-track instant, 8 variants): 12.1 .. 16.7 mm from the toe (median 14.6); 22.5 .. 27.1 mm above the leading edge (median 25.1)
+      with the application's instant: median 18.0 mm from the toe, 25.9 mm above the leading edge
+      FERRULE variant (shaft line + ferrule on both frames, hosel length from shot 1): 14.4 mm from the toe, 22.1 mm above the leading edge
+      leading edge at mid-contact: 10.8 mm below the ball's bottom
+   shot 3: frame 43 is 1.60 ms before mid-contact, frame 44 2.02 ms after | before-frame fit: shaft 0.50 px, top edge 0.79 px | after-frame: 0 edge columns, shaft 0.00, edge 0.00 px
+      impact (ball-track instant, 4 variants): 45.1 .. 45.2 mm from the toe (median 45.1); 39.5 .. 39.8 mm above the leading edge (median 39.7)
+      with the application's instant: median 45.3 mm from the toe, 39.4 mm above the leading edge
+      FERRULE variant (shaft line + ferrule on both frames, hosel length from shot 1): 39.9 mm from the toe, 28.7 mm above the leading edge
+      leading edge at mid-contact: 23.3 mm below the ball's bottom
+   shot 4: frame 44 is 0.52 ms before mid-contact, frame 45 3.09 ms after | before-frame fit: shaft 0.07 px, top edge 0.49 px | after-frame: 0 edge columns, shaft 0.00, edge 0.00 px
+      impact (ball-track instant, 4 variants): 66.3 .. 66.4 mm from the toe (median 66.3); 31.9 .. 32.0 mm above the leading edge (median 32.0)
+      with the application's instant: median 66.3 mm from the toe, 32.0 mm above the leading edge
+      FERRULE variant (shaft line + ferrule on both frames, hosel length from shot 1): 64.4 mm from the toe, 26.7 mm above the leading edge
+      leading edge at mid-contact: 17.4 mm below the ball's bottom

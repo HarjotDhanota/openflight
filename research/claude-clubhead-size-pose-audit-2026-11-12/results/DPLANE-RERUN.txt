@@ -1,0 +1,34 @@
+TS4 hosel length on shot 1's trace at the application's angles: 61.0 mm (pipeline.py: 61.0); trace fit 0.74 px
+
+SHOT 1   mark 12.3 mm from the toe, 23.9 mm above the leading edge
+   self-check: the inversion on the application's own inputs gives face 3.46, loft 26.65 (application recorded 3.46, 26.65)
+   inputs against the horizon: attack -5.8 (application -8.65), launch 15.0 (application 19.59, radar); camera pitch 2.18 deg; target line is 2.07 deg from the camera axis
+   D-plane out: face +3.66, loft 19.79 (application: +3.46, 26.65); with the ball track's horizontal launch 8.5 instead of 4.94: face +8.07, loft 19.78
+   A application angles, old ball track       face  +1.4 loft 26.7 | mid-contact -0.43 ms | top edge  16.7 / 27.1 (miss  +4.3 /  +3.3) | shaft+ferrule  14.4 / 22.1 (miss  +2.1 /  -1.7)
+   B application angles, line-of-sight track  face  +1.4 loft 26.7 | mid-contact -0.42 ms | top edge  16.8 / 27.2 (miss  +4.5 /  +3.3) | shaft+ferrule  14.5 / 22.2 (miss  +2.2 /  -1.7)
+   C measured attack + launch                 face  +1.6 loft 19.8 | mid-contact -0.42 ms | top edge  17.7 / 30.8 (miss  +5.4 /  +6.9) | shaft+ferrule  14.0 / 23.2 (miss  +1.7 /  -0.7)
+   D C + loft raised by the pitch             face  +1.6 loft 22.0 | mid-contact -0.42 ms | top edge  17.3 / 29.6 (miss  +5.0 /  +5.7) | shaft+ferrule  14.2 / 22.9 (miss  +1.9 /  -1.0)
+   E C + ball-track horizontal launch         face  +6.0 loft 19.8 | mid-contact -0.42 ms | top edge  16.5 / 31.2 (miss  +4.2 /  +7.3) | shaft+ferrule  13.2 / 23.1 (miss  +0.9 /  -0.8)
+
+SHOT 3   mark 43.5 mm from the toe, 30.3 mm above the leading edge
+   self-check: the inversion on the application's own inputs gives face 6.96, loft 21.56 (application recorded 6.96, 21.56)
+   inputs against the horizon: attack -5.5 (application +5.24), launch 18.3 (application 18.64, camera_fallback); camera pitch 2.08 deg; target line is 2.07 deg from the camera axis
+   D-plane out: face +6.77, loft 23.97 (application: +6.96, 21.56); with the ball track's horizontal launch 8.7 instead of 8.43: face +7.12, loft 23.97
+   A application angles, old ball track       face  +4.9 loft 21.6 | mid-contact -0.19 ms | top edge  45.2 / 39.5 (miss  +1.7 /  +9.2) | shaft+ferrule  39.9 / 28.7 (miss  -3.5 /  -1.7)
+   B application angles, line-of-sight track  face  +4.9 loft 21.6 | mid-contact -0.17 ms | top edge  45.2 / 39.5 (miss  +1.7 /  +9.2) | shaft+ferrule  40.0 / 28.7 (miss  -3.5 /  -1.7)
+   C measured attack + launch                 face  +4.7 loft 24.0 | mid-contact -0.17 ms | top edge  44.6 / 38.5 (miss  +1.1 /  +8.1) | shaft+ferrule  39.9 / 28.6 (miss  -3.5 /  -1.8)
+   D C + loft raised by the pitch             face  +4.7 loft 26.1 | mid-contact -0.17 ms | top edge  44.1 / 37.6 (miss  +0.6 /  +7.2) | shaft+ferrule  39.9 / 28.5 (miss  -3.6 /  -1.9)
+   E C + ball-track horizontal launch         face  +5.1 loft 24.0 | mid-contact -0.17 ms | top edge  44.6 / 38.5 (miss  +1.1 /  +8.2) | shaft+ferrule  39.9 / 28.6 (miss  -3.5 /  -1.8)
+
+SHOT 4   mark 66.1 mm from the toe, 28.1 mm above the leading edge
+   self-check: the inversion on the application's own inputs gives face 10.52, loft 32.90 (application recorded 10.52, 32.90)
+   inputs against the horizon: attack -6.5 (application -2.24), launch 25.6 (application 25.90, camera_fallback); camera pitch 2.07 deg; target line is 2.07 deg from the camera axis
+   D-plane out: face +10.53, loft 34.05 (application: +10.52, 32.90); with the ball track's horizontal launch 10.2 instead of 10.45: face +10.15, loft 34.05
+   A application angles, old ball track       face  +8.5 loft 32.9 | mid-contact -0.01 ms | top edge  66.3 / 31.9 (miss  +0.2 /  +3.8) | shaft+ferrule  64.4 / 26.7 (miss  -1.7 /  -1.4)
+   B application angles, line-of-sight track  face  +8.5 loft 32.9 | mid-contact +0.05 ms | top edge  66.2 / 31.9 (miss  +0.1 /  +3.8) | shaft+ferrule  64.3 / 26.7 (miss  -1.8 /  -1.4)
+   C measured attack + launch                 face  +8.5 loft 34.1 | mid-contact +0.05 ms | top edge  66.0 / 31.3 (miss  -0.0 /  +3.2) | shaft+ferrule  64.4 / 26.5 (miss  -1.7 /  -1.5)
+   D C + loft raised by the pitch             face  +8.5 loft 36.1 | mid-contact +0.05 ms | top edge  65.8 / 30.0 (miss  -0.3 /  +2.0) | shaft+ferrule  64.5 / 26.2 (miss  -1.6 /  -1.9)
+   E C + ball-track horizontal launch         face  +8.1 loft 34.1 | mid-contact +0.05 ms | top edge  66.0 / 31.2 (miss  -0.1 /  +3.1) | shaft+ferrule  64.4 / 26.5 (miss  -1.7 /  -1.5)
+
+RULE (written before running): orientation explains the fat-shot height miss only if the top-edge height miss on shots 3 AND 4 is under 3 mm in row C with shot 1 no worse than row A by more than 1 mm.
+   top-edge height miss, row A -> row C: shot 1 +3.3 -> +6.9, shot 3 +9.2 -> +8.1, shot 4 +3.8 -> +3.2 mm: NOT SUPPORTED

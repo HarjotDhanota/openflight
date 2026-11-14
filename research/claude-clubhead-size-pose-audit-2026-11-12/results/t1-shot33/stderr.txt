@@ -1,0 +1,6 @@
+[SERVER] Camera analysis runs with a lighting note: lighting: the resting ball was not found where the setup saw it
+[SERVER] Shot stage camera_fusion_shared failed: ValueError: missing effective camera geometry: tee_slant_range_m (camera_resting_ball: no resting ball in the setup box; iwr_post_impact: no IWR launch point on this shot; camera_prior: no camera prior: the setup saved no ball range and the shot's look had none; camera_ball_size: no resting ball: neither the shot's look, the setup nor a search found it)
+Traceback (most recent call last):
+  File "F:\Coding\OpenFlight\openflight-integration\src\openflight\server.py", line 6781, in _fuse_camera_measurements
+    raise ValueError(
+ValueError: missing effective camera geometry: tee_slant_range_m (camera_resting_ball: no resting ball in the setup box; iwr_post_impact: no IWR launch point on this shot; camera_prior: no camera prior: the setup saved no ball range and the shot's look had none; camera_ball_size: no resting ball: neither the shot's look, the setup nor a search found it)

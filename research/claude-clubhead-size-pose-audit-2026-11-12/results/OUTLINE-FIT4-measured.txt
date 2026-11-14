@@ -1,0 +1,40 @@
+shot 1 angles: face +1.60, loft 19.79, roll -3.52 (application's: +1.40, 26.65, -3.52)
+SHOT 1   mark 12.3 / 23.9 | rest frame 43: 19 top columns (rim's own edge on 17), 10 toe rows (rim's outer edge on 0); cavity level 45 DN, its toe end x 168.4
+      rest frame 43 rim values, mm across the rim: 8.5 8.7 7.1 6.7 5.2 5.3 5.7 4.4 4.6 4.7 4.9 3.6 4.3 4.9 5.2 3.5 3.5
+      frame 42 before it: dl.observe_frame; 9 values: 5.0 5.2 4.7 4.0 3.5 4.7 4.2 4.9 5.1
+   rim thickness for this swing: 4.9 mm across the rim (median of 26 values) = 2.88 px on the rest frame
+   W0 hosel + top                     width 1.000 | fit rms px: shaft 0.10, top 0.34, toe nan | ferrule distance this placement implies 59.8 mm | reading 13.1 / 22.3 (miss +0.8 / -1.5)
+   W1 hosel + top + toe               width 1.000 | fit rms px: shaft 0.30, top 0.36, toe 1.12 | ferrule distance this placement implies 59.8 mm | reading 13.3 / 22.3 (miss +0.9 / -1.6)
+   W2 hosel + top + toe, width free   width 1.028 | fit rms px: shaft 0.10, top 0.32, toe 0.75 | ferrule distance this placement implies 59.5 mm | reading 14.6 / 22.0 (miss +2.3 / -1.8)
+
+shot 2 angles: face +5.76, loft 22.74, roll -0.44 (application's: +5.63, 23.81, -0.44)
+SHOT 2   mark 43.3 / 12.4 | rest frame 42: 23 top columns (rim's own edge on 22), 4 toe rows (rim's outer edge on 3); cavity level 45 DN, its toe end x 186.8
+      rest frame 42 rim values, mm across the rim: 8.6 4.3 7.8 6.9 7.1 5.2 6.0 6.1 5.2 5.5 5.7 4.3 5.0 5.8 6.1 4.4 4.7 4.9 4.6 6.1 5.6 6.9 5.6 6.2 9.5
+      frame 41 before it: dl.observe_frame; 28 values: 4.7 5.0 5.3 5.6 4.2 4.8 5.1 5.3 5.9 4.7 5.0 5.3 5.5 4.4 5.0 6.7 6.8 7.4 8.1 6.9 7.4 5.5 7.1 6.0 4.5 7.4 5.9 7.2
+   rim thickness for this swing: 5.6 mm across the rim (median of 53 values) = 2.94 px on the rest frame
+   W0 hosel + top                     width 1.000 | fit rms px: shaft 0.28, top 0.87, toe nan | ferrule distance this placement implies 61.3 mm | reading 42.1 / 12.5 (miss -1.2 / +0.1)
+   W1 hosel + top + toe               width 1.000 | fit rms px: shaft 0.48, top 0.81, toe 2.28 | ferrule distance this placement implies 61.4 mm | reading 42.0 / 12.6 (miss -1.3 / +0.2)
+   W2 hosel + top + toe, width free   width 0.931 | fit rms px: shaft 0.21, top 0.53, toe 1.43 | ferrule distance this placement implies 61.8 mm | reading 40.0 / 13.0 (miss -3.3 / +0.6)
+
+shot 3 angles: face +4.71, loft 23.97, roll +1.57 (application's: +4.89, 21.56, +1.57)
+SHOT 3   mark 43.5 / 30.3 | rest frame 43: 6 top columns (rim's own edge on 1), 6 toe rows (rim's outer edge on 0); cavity level 46 DN, its toe end x 187.8
+      rest frame 43 rim values, mm across the rim: 5.9
+      frame 42 before it: dl.observe_frame; 16 values: 8.1 8.2 6.3 5.4 5.6 6.3 6.4 7.4 6.6 6.3 5.2 5.6 6.0 6.2 5.8 6.7
+   rim thickness for this swing: 6.3 mm across the rim (median of 17 values) = 2.86 px on the rest frame
+   W0 hosel + top                     width 1.000 | fit rms px: shaft 0.43, top 0.42, toe nan | ferrule distance this placement implies 64.5 mm | reading 40.9 / 30.5 (miss -2.6 / +0.2)
+   W1 hosel + top + toe               width 1.000 | fit rms px: shaft 0.67, top 0.67, toe 1.21 | ferrule distance this placement implies 65.0 mm | reading 42.0 / 31.0 (miss -1.5 / +0.7)
+   W2 hosel + top + toe, width free   width 1.051 | fit rms px: shaft 0.40, top 0.70, toe 0.52 | ferrule distance this placement implies 64.3 mm | reading 42.6 / 30.4 (miss -0.9 / +0.0)
+
+shot 4 angles: face +8.46, loft 34.05, roll -1.00 (application's: +8.45, 32.90, -1.00)
+SHOT 4   mark 66.1 / 28.1 | rest frame 44: 15 top columns (rim's own edge on 6), 7 toe rows (rim's outer edge on 0); cavity level 48 DN, its toe end x 201.4
+      rest frame 44 rim values, mm across the rim: 7.2 8.2 6.6 6.7 6.2 6.0
+      frame 43 before it: dl.observe_frame; 18 values: 5.2 5.1 5.3 5.6 5.8 6.1 4.4 4.7 5.3 5.7 6.0 6.2 6.9 5.5 5.7 5.8 4.5 5.0
+   rim thickness for this swing: 5.7 mm across the rim (median of 24 values) = 2.82 px on the rest frame
+   W0 hosel + top                     width 1.000 | fit rms px: shaft 0.04, top 0.36, toe nan | ferrule distance this placement implies 59.1 mm | reading 63.0 / 26.5 (miss -3.1 / -1.6)
+   W1 hosel + top + toe               width 1.000 | fit rms px: shaft 0.66, top 0.44, toe 2.15 | ferrule distance this placement implies 59.2 mm | reading 64.2 / 26.5 (miss -1.8 / -1.6)
+   W2 hosel + top + toe, width free   width 1.077 | fit rms px: shaft 0.04, top 0.49, toe 0.86 | ferrule distance this placement implies 58.6 mm | reading 63.5 / 25.9 (miss -2.5 / -2.2)
+
+RULE (written before running): W0, W1 or W2, the same for all four, within 4 mm heel-toe and 4 mm in height on every shot.
+   W0  misses (heel-toe / height): +0.8 / -1.5   -1.2 / +0.1   -2.6 / +0.2   -3.1 / -1.6 -> PASS | implied ferrule distance: 59.8 61.3 64.5 59.1 mm
+   W1  misses (heel-toe / height): +0.9 / -1.6   -1.3 / +0.2   -1.5 / +0.7   -1.8 / -1.6 -> PASS | implied ferrule distance: 59.8 61.4 65.0 59.2 mm
+   W2  misses (heel-toe / height): +2.3 / -1.8   -3.3 / +0.6   -0.9 / +0.0   -2.5 / -2.2 -> PASS | implied ferrule distance: 59.5 61.8 64.3 58.6 mm

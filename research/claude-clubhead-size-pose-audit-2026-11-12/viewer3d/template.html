@@ -1,0 +1,514 @@
+<title>Shot 1 Club Pose in 3-D</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&display=swap">
+<style>
+/* Layout: one dark stage (the camera's world) with a control rail beside it; reading and notes below. */
+:root {
+  --bg: #f3f5f4; --panel: #ffffff; --fg: #17201c; --muted: #5b6963; --line: #d5dcd8;
+  --accent: #14784f; --accent-fg: #ffffff; --press: #e3ece7;
+  --read: #1d9a4a; --mark: #c2267f; --app: #d9780a; --trace: #e23b3b; --normal: #2b7fd4; --path: #b8890a;
+  --stage: #0c1113; --stage-fg: #dfe7e3; --stage-line: #2a3531;
+  --display: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
+  --body: "Inter", "Segoe UI", system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #101614; --panel: #171f1c; --fg: #e4ebe7; --muted: #97a59f; --line: #2b3632;
+  --accent: #46c28a; --accent-fg: #06150e; --press: #22302a;
+  --read: #4fd07a; --mark: #f06bb4; --app: #f2a23c; --trace: #ff6b6b; --normal: #6fb1f2; --path: #ffd35a;
+  --stage: #080b0c; --stage-fg: #dfe7e3; --stage-line: #2a3531; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #101614; --panel: #171f1c; --fg: #e4ebe7; --muted: #97a59f; --line: #2b3632;
+  --accent: #46c28a; --accent-fg: #06150e; --press: #22302a;
+  --read: #4fd07a; --mark: #f06bb4; --app: #f2a23c; --trace: #ff6b6b; --normal: #6fb1f2; --path: #ffd35a;
+  --stage: #080b0c; --stage-fg: #dfe7e3; --stage-line: #2a3531; color-scheme: dark }
+
+body { background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 15px; line-height: 1.5; }
+.wrap { max-width: 1240px; margin: 0 auto; padding-block: 20px 40px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex; flex-direction: column; gap: 18px; }
+h1 { font-family: var(--display); font-weight: 600; font-size: 1.55rem; line-height: 1.2; margin: 0; text-wrap: balance; }
+h2 { font-family: var(--display); font-weight: 600; font-size: 1.02rem; margin: 0; }
+p { margin: 0; }
+.lede { color: var(--muted); max-width: 68ch; }
+.head { display: flex; flex-direction: column; gap: 6px; }
+
+.work { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
+@media (max-width: 900px) { .work { grid-template-columns: minmax(0, 1fr); } }
+
+.stage { background: var(--stage); border-radius: 10px; overflow: hidden; position: relative; min-width: 0; }
+.stage canvas { display: block; width: 100%; height: auto; touch-action: none; cursor: grab; }
+.stage canvas:active { cursor: grabbing; }
+.stage-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px; border-top: 1px solid var(--stage-line); align-items: center; }
+.stage-bar .lab, .stage-note { color: var(--stage-fg); opacity: .75; font-size: .8rem; }
+.stage-note { padding: 0 10px 10px; opacity: .7; }
+.stage-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--stage-fg); padding: 24px; text-align: center; }
+
+.seg { display: flex; flex-wrap: wrap; gap: 6px; }
+button { font: inherit; }
+.btn { border: 1px solid var(--line); background: var(--panel); color: var(--fg); padding: 7px 11px; border-radius: 7px; cursor: pointer; font-size: .86rem; }
+.btn:hover { background: var(--press); }
+.btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 600; }
+.btn:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.stage-bar .btn { background: transparent; color: var(--stage-fg); border-color: var(--stage-line); }
+.stage-bar .btn:hover { background: var(--stage-line); }
+.stage-bar .btn[aria-pressed="true"] { background: var(--stage-fg); color: var(--stage); border-color: var(--stage-fg); }
+
+.rail { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.group { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.group .hint { color: var(--muted); font-size: .82rem; }
+.row { display: grid; grid-template-columns: 92px minmax(0, 1fr) 62px; gap: 8px; align-items: center; font-size: .86rem; }
+.row output { text-align: right; font-variant-numeric: tabular-nums; }
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+.checks { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; font-size: .86rem; }
+.checks label { display: flex; gap: 7px; align-items: center; min-width: 0; }
+
+.read { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.card .k { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: .82rem; }
+.card .v { font-family: var(--display); font-size: 1.25rem; font-variant-numeric: tabular-nums; }
+.card .s { color: var(--muted); font-size: .82rem; }
+.dot { width: 11px; height: 11px; border-radius: 50%; flex: none; }
+.dot.read { background: var(--read); } .dot.mark { box-shadow: inset 0 0 0 2.5px var(--mark); } .dot.app { background: var(--app); }
+.dot.trace { background: var(--trace); border-radius: 2px; height: 3px; width: 14px; }
+.dot.path { background: var(--path); border-radius: 2px; height: 3px; width: 14px; } .dot.normal { background: var(--normal); }
+
+.notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; }
+.notes section { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.notes ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; color: var(--fg); }
+.notes li { max-width: 62ch; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: .84rem; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+</style>
+
+<div class="wrap">
+  <header class="head">
+    <h1>Shot 1 club pose in 3-D</h1>
+    <p class="lede">The placed club as a solid object in the camera's own space. Start from the camera's view, where the model sits on the real pixels, then drag to walk around it and see how the face is actually turned.</p>
+  </header>
+
+  <div class="work">
+    <div class="stage" id="stage">
+      <canvas id="view" aria-label="3-D view of the club, ball and camera frame"></canvas>
+      <div class="stage-msg" id="msg" hidden></div>
+      <div class="stage-bar" role="group" aria-label="Viewpoint">
+        <span class="lab">Look from</span>
+        <button class="btn" id="v-camera" data-view="camera" aria-pressed="true">Camera</button>
+        <button class="btn" id="v-behind" data-view="behind" aria-pressed="false">Behind, raised</button>
+        <button class="btn" id="v-toe" data-view="toe" aria-pressed="false">Toe side</button>
+        <button class="btn" id="v-face" data-view="face" aria-pressed="false">Face-on</button>
+        <button class="btn" id="v-top" data-view="top" aria-pressed="false">Above</button>
+      </div>
+      <p class="stage-note">Drag to orbit, scroll or pinch to zoom, right-drag to pan. The picture hangs 120 mm behind the ball like a projector screen: it lines up with the model only from the camera.</p>
+    </div>
+
+    <div class="rail">
+      <div class="group">
+        <h2>Moment</h2>
+        <div class="seg" role="group" aria-label="Moment in the swing">
+          <button class="btn" id="p-before" data-pose="before" aria-pressed="true">Frame before</button>
+          <button class="btn" id="p-contact" data-pose="contact" aria-pressed="false">Contact</button>
+          <button class="btn" id="p-after" data-pose="after" aria-pressed="false">Frame after</button>
+        </div>
+        <p class="hint" id="pose-hint"></p>
+        <div class="seg" role="group" aria-label="Which contact instant to use">
+          <button class="btn" id="t-track" data-instant="track" aria-pressed="true">Contact from the ball's track</button>
+          <button class="btn" id="t-app" data-instant="app" aria-pressed="false">App's contact instant</button>
+        </div>
+        <p class="hint" id="instant-hint"></p>
+      </div>
+
+      <div class="group">
+        <h2>Turn the club yourself</h2>
+        <div class="row"><label for="s-face">Face angle</label><input type="range" id="s-face" min="-30" max="40" step="any"><output id="o-face"></output></div>
+        <div class="row"><label for="s-loft">Loft</label><input type="range" id="s-loft" min="0" max="60" step="any"><output id="o-loft"></output></div>
+        <div class="row"><label for="s-roll">Toe up / down</label><input type="range" id="s-roll" min="-20" max="20" step="any"><output id="o-roll"></output></div>
+        <div class="row"><label for="s-dx">Slide to toe</label><input type="range" id="s-dx" min="-30" max="30" step="0.5"><output id="o-dx"></output></div>
+        <div class="row"><label for="s-dy">Raise</label><input type="range" id="s-dy" min="-30" max="30" step="0.5"><output id="o-dy"></output></div>
+        <div class="row"><label for="s-size">Size</label><input type="range" id="s-size" min="0.8" max="1.1" step="any"><output id="o-size"></output></div>
+        <button class="btn" id="reset">Back to the fitted pose</button>
+        <p class="hint">Angles start at the values the launch model supplies. Position and size start at what was fitted to the pixels.</p>
+      </div>
+
+      <div class="group">
+        <h2>Show</h2>
+        <div class="checks">
+          <label><input type="checkbox" id="c-frame" checked> Camera frame</label>
+          <label><input type="checkbox" id="c-trace" checked> Your trace</label>
+          <label><input type="checkbox" id="c-ball" checked> Ball and flight</label>
+          <label><input type="checkbox" id="c-mat"> Mat, 1 inch</label>
+          <label><input type="checkbox" id="c-marks" checked> Impact marks</label>
+          <label><input type="checkbox" id="c-edges" checked> Edges</label>
+        </div>
+        <div class="row"><label for="s-alpha">Club solid</label><input type="range" id="s-alpha" min="0.1" max="1" step="0.05" value="0.55"><output id="o-alpha"></output></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="read">
+    <div class="card"><div class="k"><span class="dot read"></span>Impact point at contact</div><div class="v" id="r-live">–</div><div class="s" id="r-live-s">toe-ward of the face centre, up from it</div></div>
+    <div class="card"><div class="k"><span class="dot mark"></span>Mark in the face photo</div><div class="v">+27.7, 0.0 mm</div><div class="s">mapped onto this face, good to about 3 mm</div></div>
+    <div class="card"><div class="k"><span class="dot app"></span>App at the current pin</div><div class="v">+32.7, −10.8 mm</div><div class="s">its own flat model and placement</div></div>
+    <div class="card"><div class="k"><span class="dot normal"></span>Orientation shown</div><div class="v" id="r-ang">–</div><div class="s">face angle, loft, toe up (+) or down (−)</div></div>
+  </div>
+
+  <div class="legend" aria-label="Legend">
+    <span><span class="dot read"></span>impact point read from this pose</span>
+    <span><span class="dot mark"></span>ball print from the photo, 19 mm across</span>
+    <span><span class="dot app"></span>app's reading</span>
+    <span><span class="dot trace"></span>your red trace of the head</span>
+    <span><span class="dot normal"></span>arrow: where the face points</span>
+    <span><span class="dot path"></span>ball's flight; wire balls are frames 45 and 46</span>
+  </div>
+
+  <div class="notes">
+    <section>
+      <h2>How to read it</h2>
+      <ul>
+        <li><b>Camera</b> is the rig's view. The solid club should cover the head in the picture; lower the Club solid slider to see the pixels through it.</li>
+        <li><b>Toe side</b> shows loft: how far the face leans back from vertical.</li>
+        <li><b>Above</b> shows face angle: how far the blue arrow swings off the line away from the camera.</li>
+        <li><b>Face-on</b> shows the striking face with the three impact points on it.</li>
+      </ul>
+    </section>
+    <section>
+      <h2>What is measured and what is not</h2>
+      <ul>
+        <li>Where the club sits across the view comes from the pixels: the shaft line, the head's top edge and your trace.</li>
+        <li>The club's distance from the camera is not measured. It is set so the face touches the ball at contact, and moved by club speed times time for the other two frames. The size (0.93) follows from that distance.</li>
+        <li>Face angle 1.4°, loft 26.7° and toe-down 3.5° are supplied by the launch model. The rear view cannot yet check them to better than about 10°.</li>
+        <li>The body's thickness and the score lines are a generic iron drawn for orientation. Only the face outline, sole and shaft axis are used in the fit.</li>
+        <li>The ball after impact is measured: its direction from the camera comes from its edge on frames 44 to 46 (fit within 0.4 px), its distance from that flight and the radar speed. The short orange line through it is the 6 mm either way I would allow in distance.</li>
+        <li>The mat is drawn level through the ball's bottom; the camera is assumed level, so treat it as approximate.</li>
+      </ul>
+    </section>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" integrity="sha384-CI3ELBVUz9XQO+97x6nwMDPosPR5XvsxW2ua7N1Xeygeh1IxtgqtCkGfQY9WWdHu" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js" integrity="sha384-wagZhIFgY4hD+7awjQjR4e2E294y6J2HSnd8eTNc15ZubTeQeVRZwhQJ+W6hnBsf" crossorigin="anonymous"></script>
+<script>
+const SCENE = __SCENE__;
+
+(function () {
+  const canvas = document.getElementById('view');
+  const msg = document.getElementById('msg');
+  if (!window.THREE || !THREE.OrbitControls) {
+    msg.hidden = false;
+    msg.textContent = 'The 3-D library did not load, so the view cannot be drawn. Reload the page with a network connection.';
+    return;
+  }
+  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const rad = (d) => d * Math.PI / 180;
+  const V = (p) => new THREE.Vector3(p[0], -p[1], -p[2]);          // camera frame (x right, y down, z forward) -> three
+  const add = (a, b, k) => [a[0] + k * b[0], a[1] + k * b[1], a[2] + k * b[2]];
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const norm = (a) => { const n = Math.hypot(a[0], a[1], a[2]); return [a[0] / n, a[1] / n, a[2] / n]; };
+
+  function axes(face, loft, roll) {                                 // same construction as the fit
+    const f = rad(face), lo = rad(loft), li = rad(roll);
+    const toe0 = [Math.cos(f), 0, -Math.sin(f)];
+    const n = [Math.sin(f) * Math.cos(lo), -Math.sin(lo), Math.cos(f) * Math.cos(lo)];
+    const up0 = cross(toe0, n);
+    const toe = add([toe0[0] * Math.cos(li), toe0[1] * Math.cos(li), toe0[2] * Math.cos(li)], up0, Math.sin(li));
+    const up = add([up0[0] * Math.cos(li), up0[1] * Math.cos(li), up0[2] * Math.cos(li)], toe0, -Math.sin(li));
+    return { toe, up, n };
+  }
+
+  const cam = SCENE.camera, ball = SCENE.ball_mm, R = SCENE.ball_radius_mm;
+  const aspect = cam.width / cam.height;
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(css('--stage'));
+  const camera = new THREE.PerspectiveCamera(5, aspect, 20, 9000);
+  const controls = new THREE.OrbitControls(camera, canvas);
+  controls.target.copy(V(ball));
+  controls.enableDamping = false;
+  controls.addEventListener('change', () => { setPressed('[data-view]', null); render(); });
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x3a4440, 0.95));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.75);
+  sun.position.copy(V(add(ball, [-600, -900, -700], 1)));   // behind the ball, to the left and above, like the camera's side
+  sun.target.position.copy(V(ball));
+  scene.add(sun, sun.target);
+
+  // ---- the camera frame as a screen behind the ball
+  const zb = ball[2] + 120;
+  const px3 = (px, py, z) => [(px - cam.cx) * z / cam.focal_px, (py - cam.cy) * z / cam.focal_px, z];
+  const quad = new THREE.BufferGeometry();
+  const corners = [[-0.5, -0.5], [cam.width - 0.5, -0.5], [cam.width - 0.5, cam.height - 0.5], [-0.5, cam.height - 0.5]];
+  quad.setAttribute('position', new THREE.Float32BufferAttribute(corners.flatMap((c) => V(px3(c[0], c[1], zb)).toArray()), 3));
+  quad.setAttribute('uv', new THREE.Float32BufferAttribute([0, 1, 1, 1, 1, 0, 0, 0], 2));
+  quad.setIndex([0, 1, 2, 0, 2, 3]);
+  const loader = new THREE.TextureLoader();
+  const textures = {};
+  Object.keys(SCENE.frames).forEach((k) => {
+    textures[k] = loader.load(SCENE.frames[k], render);
+    textures[k].magFilter = THREE.NearestFilter;
+    textures[k].minFilter = THREE.LinearFilter;
+  });
+  const screen = new THREE.Mesh(quad, new THREE.MeshBasicMaterial({ map: textures.f43, side: THREE.DoubleSide }));
+  scene.add(screen);
+  const tracePts = SCENE.trace_px.concat([SCENE.trace_px[0]]).map((p) => V(px3(p[0], p[1], zb - 2)));
+  const trace = new THREE.Line(new THREE.BufferGeometry().setFromPoints(tracePts), new THREE.LineBasicMaterial({ color: css('--trace') }));
+  scene.add(trace);
+
+  // ---- ball, mat, line of sight
+  const ballMesh = new THREE.Mesh(new THREE.SphereGeometry(R, 40, 28), new THREE.MeshStandardMaterial({ color: 0xf4f4f0, roughness: 0.55, transparent: true, opacity: 0.55 }));
+  ballMesh.position.copy(V(ball));
+  scene.add(ballMesh);
+  const bfl = SCENE.ball_flight;
+  const flight = new THREE.Group();
+  const flyMat = new THREE.MeshStandardMaterial({ color: 0xf7f7f2, roughness: 0.5, transparent: true, opacity: 0.8 });
+  const fly44 = new THREE.Mesh(new THREE.SphereGeometry(R, 40, 28), flyMat);
+  fly44.position.copy(V(bfl.f44));
+  flight.add(fly44);
+  ['f45', 'f46'].forEach((k) => {
+    const g = new THREE.Mesh(new THREE.SphereGeometry(R, 24, 16), new THREE.MeshBasicMaterial({ color: 0xf7f7f2, wireframe: true, transparent: true, opacity: 0.35 }));
+    g.position.copy(V(bfl[k]));
+    flight.add(g);
+  });
+  flight.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([V(ball), V(bfl.f44), V(bfl.f45), V(bfl.f46)]), new THREE.LineBasicMaterial({ color: 0xffe27a })));
+  flight.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(bfl.f44_band.map(V)), new THREE.LineBasicMaterial({ color: 0xff8a3c })));
+  scene.add(flight);
+  const matTop = ball[1] + R, thick = 25.4;
+  const mat = new THREE.Group();
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(700, thick, 900), new THREE.MeshStandardMaterial({ color: 0x2f6b4a, roughness: 0.95, transparent: true, opacity: 0.38 }));
+  slab.position.copy(V([ball[0] - 60, matTop + thick / 2, ball[2] - 150]));
+  mat.add(slab);
+  const gridPts = [];
+  for (let gx = -400; gx <= 280; gx += 50) gridPts.push(V([ball[0] + gx, matTop - 0.4, ball[2] - 600]), V([ball[0] + gx, matTop - 0.4, ball[2] + 300]));
+  for (let gz = -600; gz <= 300; gz += 50) gridPts.push(V([ball[0] - 400, matTop - 0.4, ball[2] + gz]), V([ball[0] + 280, matTop - 0.4, ball[2] + gz]));
+  mat.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(gridPts), new THREE.LineBasicMaterial({ color: 0x8fd3ad, transparent: true, opacity: 0.35 })));
+  scene.add(mat);
+  const sight = new THREE.Line(new THREE.BufferGeometry().setFromPoints([V([0, 0, 0]), V(ball)]), new THREE.LineDashedMaterial({ color: 0x9aa7a1, dashSize: 14, gapSize: 10, transparent: true, opacity: 0.6 }));
+  sight.computeLineDistances();
+  scene.add(sight);
+
+  // ---- the club (rebuilt whenever the pose changes)
+  const steel = new THREE.MeshStandardMaterial({ color: 0x9aa5ae, metalness: 0.2, roughness: 0.5, side: THREE.DoubleSide, transparent: true });
+  const faceMat = new THREE.MeshStandardMaterial({ color: 0xdfe4e8, metalness: 0.25, roughness: 0.6, side: THREE.DoubleSide, transparent: true });
+  const shaftMat = new THREE.MeshStandardMaterial({ color: 0xc8ced4, metalness: 0.2, roughness: 0.45, transparent: true });
+  const ferruleMat = new THREE.MeshStandardMaterial({ color: 0x15181a, roughness: 0.6, transparent: true });
+  const club = new THREE.Group();
+  scene.add(club);
+  const marks = new THREE.Group();
+  scene.add(marks);
+  const bladeUV = SCENE.outline_uv.slice(0, SCENE.blade_count);
+  const tri = THREE.ShapeUtils.triangulateShape(bladeUV.map((p) => new THREE.Vector2(p[0], p[1])), []);
+  const vMin = Math.min.apply(null, bladeUV.map((p) => p[1])), vMax = Math.max.apply(null, bladeUV.map((p) => p[1]));
+  const toeU = Math.max.apply(null, SCENE.outline_uv.map((p) => p[0]));
+
+  function inBlade(u, v) {
+    let inside = false;
+    for (let i = 0, j = bladeUV.length - 1; i < bladeUV.length; j = i++) {
+      const a = bladeUV[i], b = bladeUV[j];
+      if ((a[1] > v) !== (b[1] > v) && u < (b[0] - a[0]) * (v - a[1]) / (b[1] - a[1]) + a[0]) inside = !inside;
+    }
+    return inside;
+  }
+  function cylinder(p0, p1, radius, material) {
+    const a = V(p0), b = V(p1), d = new THREE.Vector3().subVectors(b, a);
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, d.length(), 28, 1), material);
+    m.position.copy(a).addScaledVector(d, 0.5);
+    m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.clone().normalize());
+    return m;
+  }
+  function ring(centre, ax, radius, colour, segments) {
+    const pts = [];
+    for (let i = 0; i <= segments; i++) {
+      const t = i / segments * 2 * Math.PI;
+      pts.push(V(add(add(centre, ax.toe, radius * Math.cos(t)), ax.up, radius * Math.sin(t))));
+    }
+    return new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: colour }));
+  }
+  function spot(centre, colour, radius) {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(radius, 16, 12), new THREE.MeshBasicMaterial({ color: colour }));
+    m.position.copy(V(centre));
+    return m;
+  }
+
+  const state = { pose: 'before', view: 'camera', instant: 'track' };
+  const el = (id) => document.getElementById(id);
+  const sliders = { face: el('s-face'), loft: el('s-loft'), roll: el('s-roll'), dx: el('s-dx'), dy: el('s-dy'), size: el('s-size'), alpha: el('s-alpha') };
+  function resetSliders() {
+    sliders.face.value = SCENE.angles.face; sliders.loft.value = SCENE.angles.loft; sliders.roll.value = SCENE.angles.roll;
+    sliders.dx.value = 0; sliders.dy.value = 0; sliders.size.value = SCENE.poses_by_instant[state.instant].size;
+  }
+  const fmt = (v, d) => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(d);
+
+  function build() {
+    while (club.children.length) { const c = club.children.pop(); if (c.geometry) c.geometry.dispose(); }
+    while (marks.children.length) { const c = marks.children.pop(); if (c.geometry) c.geometry.dispose(); }
+    const face = +sliders.face.value, loft = +sliders.loft.value, roll = +sliders.roll.value, size = +sliders.size.value;
+    const ax = axes(face, loft, roll);
+    const pose = SCENE.poses[state.pose];
+    const base = SCENE.poses_by_instant[state.instant][state.pose];
+    let origin = add(base, [1, 0, 0], +sliders.dx.value);
+    origin = add(origin, [0, -1, 0], +sliders.dy.value);
+    const at = (u, v, w) => add(add(add(origin, ax.toe, u), ax.up, v), ax.n, w || 0);
+
+    // solid head: the face outline swept back along the sole direction, thick at the sole and thin at the top line
+    const back = norm([-ax.n[0], 0, -ax.n[2]]), b = rad(SCENE.bounce_deg);
+    const sweep = [Math.cos(b) * back[0], Math.sin(b), Math.cos(b) * back[2]];
+    const tSole = SCENE.sole_width_mm * size, tTop = 5.5 * size;
+    const front = [], rear = [];
+    bladeUV.forEach((p) => {
+      const s = (p[1] - vMin) / (vMax - vMin);
+      const f3 = at(p[0] * size, p[1] * size, 0);
+      front.push(f3);
+      rear.push(add(f3, sweep, tTop + (tSole - tTop) * Math.pow(1 - s, 2.2)));
+    });
+    const n = bladeUV.length;
+    const pos = front.concat(rear).flatMap((p) => V(p).toArray());
+    const faceIdx = [], bodyIdx = [];
+    tri.forEach((t) => { faceIdx.push(t[0], t[1], t[2]); bodyIdx.push(n + t[2], n + t[1], n + t[0]); });
+    for (let i = 0; i < n; i++) { const j = (i + 1) % n; bodyIdx.push(i, j, n + j, i, n + j, n + i); }
+    const mk = (idx, material) => {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      g.setIndex(idx);
+      const flat = g.toNonIndexed();
+      flat.computeVertexNormals();
+      g.dispose();
+      return new THREE.Mesh(flat, material);
+    };
+    const body = mk(bodyIdx, steel), faceMesh = mk(faceIdx, faceMat);
+    club.add(body, faceMesh);
+    if (el('c-edges').checked) {
+      const all = new THREE.BufferGeometry();
+      all.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      all.setIndex(faceIdx.concat(bodyIdx));
+      club.add(new THREE.LineSegments(new THREE.EdgesGeometry(all, 35), new THREE.LineBasicMaterial({ color: 0x3be0a0 })));
+    }
+    // score lines on the face (generic drawing, for orientation)
+    const sl = SCENE.score_lines, linePts = [];
+    for (let k = 0; k < sl.count; k++) {
+      const v = vMin + sl.lowest_above_leading_edge_mm + k * sl.pitch_mm;
+      let prev = null;
+      for (let x = sl.toe_margin_mm; x <= sl.toe_margin_mm + sl.length_mm + 0.01; x += 1.0) {
+        const u = toeU - x;
+        const ok = inBlade(u, v + 1.2) && inBlade(u, v - 1.2);
+        const p = ok ? V(at(u * size, v * size, 0.35)) : null;
+        if (p && prev) linePts.push(prev, p);
+        prev = p;
+      }
+    }
+    club.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(linePts), new THREE.LineBasicMaterial({ color: 0x4d575e })));
+    // hosel, ferrule, shaft on the real 3-D axis
+    const st = SCENE.shaft_tun, gt = SCENE.ground_tun;
+    const dir = norm(add(add([ax.toe[0] * st[0], ax.toe[1] * st[0], ax.toe[2] * st[0]], ax.up, st[1]), ax.n, st[2]));
+    const ground = at(gt[0] * size, gt[1] * size, gt[2] * size);
+    const along = (s) => add(ground, dir, s);
+    const hl = SCENE.hosel_length_mm;
+    club.add(cylinder(along(6), along(hl - 4), SCENE.hosel_radius_mm * size, steel));
+    club.add(cylinder(along(hl - 4), along(hl + 6), SCENE.hosel_radius_mm * size * 0.9, ferruleMat));
+    club.add(cylinder(along(hl + 6), along(hl + 330), SCENE.shaft_radius_mm, shaftMat));
+    // where the face points
+    const arrow = new THREE.ArrowHelper(V(ax.n).normalize(), V(at(0, 0, 0.5)), 55, new THREE.Color(css('--normal')).getHex(), 11, 6);
+    club.add(arrow);
+    [steel, faceMat, shaftMat, ferruleMat].forEach((m) => { m.opacity = +sliders.alpha.value; m.depthWrite = +sliders.alpha.value > 0.95; });
+
+    // impact point on this pose: the ball's contact point seen along the camera ray, on the face plane
+    let originC = add(SCENE.poses_by_instant[state.instant].contact, [1, 0, 0], +sliders.dx.value);
+    originC = add(originC, [0, -1, 0], +sliders.dy.value);
+    const contact = add(ball, ax.n, -R);
+    const ray = norm(contact);
+    const lam = dot(originC, ax.n) / dot(ray, ax.n);
+    const hit = add([ray[0] * lam, ray[1] * lam, ray[2] * lam], originC, -1);
+    const u = dot(hit, ax.toe), v = dot(hit, ax.up);
+    if (el('c-marks').checked) {
+      marks.add(spot(at(u, v, 0.8), new THREE.Color(css('--read')).getHex(), 2.4));
+      const pm = SCENE.photo_mark;
+      marks.add(ring(at(pm.toe_mm, pm.up_mm, 0.6), ax, pm.radius_mm, new THREE.Color(css('--mark')).getHex(), 48));
+      marks.add(ring(at(pm.toe_mm, pm.up_mm, 0.6), ax, 1.2, new THREE.Color(css('--mark')).getHex(), 16));
+      marks.add(spot(at(SCENE.app.toe_mm, SCENE.app.up_mm, 0.8), new THREE.Color(css('--app')).getHex(), 2.0));
+    }
+    // read-outs
+    el('o-face').value = fmt(face, 1) + '°'; el('o-loft').value = loft.toFixed(1) + '°'; el('o-roll').value = fmt(roll, 1) + '°';
+    sliders.size.setAttribute('aria-valuetext', size.toFixed(3));
+    el('o-dx').value = fmt(+sliders.dx.value, 1) + ' mm'; el('o-dy').value = fmt(+sliders.dy.value, 1) + ' mm';
+    el('o-size').value = size.toFixed(3); el('o-alpha').value = Math.round(+sliders.alpha.value * 100) + '%';
+    el('r-ang').textContent = fmt(face, 1) + '°, ' + loft.toFixed(1) + '°, ' + fmt(roll, 1) + '°';
+    el('r-live').textContent = fmt(u, 1) + ', ' + fmt(v, 1) + ' mm';
+    const tm = SCENE.timing[state.instant];
+    const hints = { before: 'Frame 43, ' + tm.before_ms.toFixed(2) + ' ms before contact. The model is fitted to your trace here.',
+      contact: 'Mid-contact, between frames 43 and 44. The picture shown is frame 43, with the ball still at rest.',
+      after: 'Frame 44, ' + tm.after_ms.toFixed(2) + ' ms after contact. The ball is drawn where its track puts it; the faint ball is where it rested.' };
+    el('pose-hint').textContent = hints[state.pose];
+    el('instant-hint').textContent = state.instant === 'track'
+      ? 'Mid-contact from the ball\'s own flight over frames 44 to 46 and the radar speed: ' + Math.abs(SCENE.timing.track_minus_app_ms).toFixed(2) + ' ms earlier than the app\'s.'
+      : 'The app\'s instant, from the ball\'s top edge on one frame and the radar launch model.';
+    screen.material.map = textures[pose.frame];
+    screen.material.needsUpdate = true;
+    screen.visible = el('c-frame').checked;
+    trace.visible = el('c-trace').checked && el('c-frame').checked && state.pose === 'before';
+    ballMesh.visible = el('c-ball').checked;
+    ballMesh.material.opacity = state.pose === 'after' ? 0.16 : 0.55;
+    flight.visible = el('c-ball').checked && state.pose === 'after';
+    mat.visible = el('c-mat').checked;
+    sight.visible = state.view !== 'camera';
+    render();
+  }
+
+  const VIEWS = {
+    camera: { pos: [0, 0, 0], fov: 5.2, abs: true },
+    behind: { pos: [-170, -190, -430], fov: 26 },
+    toe: { pos: [470, -45, -25], fov: 26 },
+    face: { pos: [-25, -35, 440], fov: 26 },
+    top: { pos: [0, -560, -70], fov: 24 },
+  };
+  function setView(name) {
+    const v = VIEWS[name];
+    camera.position.copy(V(v.abs ? v.pos : add(ball, v.pos, 1)));
+    camera.fov = v.fov;
+    camera.up.set(0, 1, 0);
+    camera.updateProjectionMatrix();
+    controls.target.copy(V(name === 'camera' ? add(ball, [-32, 2, 0], 1) : add(ball, [-25, 0, -10], 1)));
+    controls.update();          // fires 'change', which marks the view as free; set the named view after it
+    state.view = name;
+    el('c-mat').checked = name !== 'camera';
+    mat.visible = el('c-mat').checked;
+    setPressed('[data-view]', name);
+    sight.visible = name !== 'camera';
+    render();
+  }
+  function setPressed(selector, value) {
+    document.querySelectorAll(selector).forEach((b) => {
+      const key = b.dataset.view || b.dataset.pose;
+      b.setAttribute('aria-pressed', String(key === value));
+    });
+    if (selector === '[data-view]' && value === null) { state.view = 'free'; sight.visible = true; }
+  }
+  function resize() {
+    const w = canvas.parentElement.clientWidth;
+    renderer.setSize(w, Math.round(w / aspect), false);
+    canvas.style.height = Math.round(w / aspect) + 'px';
+    render();
+  }
+  function render() { renderer.render(scene, camera); }
+
+  document.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
+  document.querySelectorAll('[data-pose]').forEach((b) => b.addEventListener('click', () => {
+    state.pose = b.dataset.pose;
+    document.querySelectorAll('[data-pose]').forEach((o) => o.setAttribute('aria-pressed', String(o === b)));
+    build();
+  }));
+  document.querySelectorAll('[data-instant]').forEach((b) => b.addEventListener('click', () => {
+    state.instant = b.dataset.instant;
+    sliders.size.value = SCENE.poses_by_instant[state.instant].size;
+    document.querySelectorAll('[data-instant]').forEach((o) => o.setAttribute('aria-pressed', String(o === b)));
+    build();
+  }));
+  Object.values(sliders).forEach((s) => s.addEventListener('input', build));
+  ['c-frame', 'c-trace', 'c-ball', 'c-mat', 'c-marks', 'c-edges'].forEach((id) => el(id).addEventListener('change', build));
+  el('reset').addEventListener('click', () => { resetSliders(); build(); });
+  window.addEventListener('resize', resize);
+
+  resetSliders();
+  resize();
+  build();
+  setView('camera');
+})();
+</script>

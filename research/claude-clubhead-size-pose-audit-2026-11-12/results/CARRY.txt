@@ -1,0 +1,15 @@
+shot 1: IN-AIR f42 -> NEAR f43 (-2.44 ms) | depth ratio 0.932, shaft turned -0.73 deg in the image, toe-ward stretch w 1.091, 1.68 mm/px
+   rim: on f42 the cavity's upper edge is 2.5 px below the silhouette's top (15 columns) -> subtract it from the edge residuals below
+   cavity's upper edge on f43 (19 columns), net of the rim: +3.2 px below the club's OWN carried silhouette; +5.2 px below the carried generic model; +4.1 px = 7 mm below the APPLICATION's model
+   club's OWN carried silhouette: rows 75.0 .. 107.5, toe x 183.9 | lowest visible row 110.5 -> -3.0 px = -5.0 mm of the head out of sight | resting ball's bottom row 107.6
+   carried generic model: rows 75.4 .. 106.9, toe x 184.2 (bottom -6.0 mm below the visible line, -1.1 mm below the ball's bottom row) | application's model: rows 76.5 .. 107.0, toe x 183.6 | sharp toe x 184.5
+shot 3: IN-AIR f42 -> NEAR f43 (-1.78 ms) | depth ratio 0.943, shaft turned -0.62 deg in the image, toe-ward stretch w 1.056, 2.18 mm/px
+   rim: on f42 the cavity's upper edge is 3.0 px below the silhouette's top (20 columns) -> subtract it from the edge residuals below
+   cavity's upper edge on f43 (6 columns), net of the rim: -0.3 px below the club's OWN carried silhouette; -0.5 px below the carried generic model; +7.3 px = 16 mm below the APPLICATION's model
+   club's OWN carried silhouette: rows 70.5 .. 97.0, toe x 164.1 | lowest visible row 89.5 -> 7.5 px = 16.4 mm of the head out of sight | resting ball's bottom row 85.0
+   carried generic model: rows 70.4 .. 96.4, toe x 164.1 (bottom 15.1 mm below the visible line, 24.9 mm below the ball's bottom row) | application's model: rows 62.6 .. 87.8, toe x 164.0 | sharp toe x 164.5
+shot 4: IN-AIR f43 -> NEAR f44 (-0.53 ms) | depth ratio 0.938, shaft turned -0.04 deg in the image, toe-ward stretch w 1.101, 2.05 mm/px
+   rim: on f43 the cavity's upper edge is 13.5 px below the silhouette's top (17 columns) -> subtract it from the edge residuals below
+   cavity's upper edge on f44 (15 columns), net of the rim: -9.3 px below the club's OWN carried silhouette; -10.2 px below the carried generic model; +3.6 px = 7 mm below the APPLICATION's model
+   club's OWN carried silhouette: rows 73.8 .. 101.9, toe x 187.3 | lowest visible row 94.5 -> 7.4 px = 15.3 mm of the head out of sight | resting ball's bottom row 91.4
+   carried generic model: rows 75.1 .. 100.0, toe x 187.5 (bottom 11.3 mm below the visible line, 17.7 mm below the ball's bottom row) | application's model: rows 61.2 .. 85.0, toe x 186.0 | sharp toe x 187.5

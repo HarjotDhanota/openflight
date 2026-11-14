@@ -1,0 +1,7 @@
+club constants from shot 1's photo: toe extreme 18.7 mm beyond the score lines' toe ends; lowest score line 4.9 mm above the leading edge; outer edge is 2.0 mm (toe) and 1.2 mm (bottom) outside the model's edge
+shot 1 photo: 13 score lines 8.60 px apart; face tilted 16.9 deg along the lines and 0.0 deg across them; outer toe-peak height 56.8 mm (shot 1: 56.8)
+   mark: centroid (171.4, 222.7) px, 18 x 21 mm; LINES: 12.3 mm from the toe, 23.9 mm above the leading edge | OUTLINE: 12.3, 23.9 | the two differ by 0.0, 0.0 mm
+shot 3 photo: 12 score lines 9.14 px apart; face tilted 0.0 deg along the lines and 10.8 deg across them; outer toe-peak height 57.1 mm (shot 1: 56.8)
+   mark: centroid (296.9, 145.5) px, 23 x 20 mm; LINES: 43.4 mm from the toe, 30.3 mm above the leading edge | OUTLINE: 43.6, 30.4 | the two differ by -0.2, -0.1 mm
+shot 4 photo: 14 score lines 10.70 px apart; face tilted 0.0 deg along the lines and 0.0 deg across them; outer toe-peak height 56.4 mm (shot 1: 56.8)
+   mark: centroid (429.9, 185.0) px, 19 x 15 mm; LINES: 66.6 mm from the toe, 28.1 mm above the leading edge | OUTLINE: 65.6, 28.1 | the two differ by 1.0, -0.0 mm

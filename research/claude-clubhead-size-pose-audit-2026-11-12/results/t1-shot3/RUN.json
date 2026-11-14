@@ -1,0 +1,16 @@
+{
+ "application_head": "0fa9870bec40d50c25d6da00b06850afea94c4c4",
+ "args": [
+  "F:\\Coding\\OpenFlight\\pi-handoff\\Harjot-outdoor-test-1\\arm5\\paired\\run-01\\session_20261024_171945_arm5.jsonl",
+  "3",
+  "--camera",
+  "--iwr",
+  "--full-shot",
+  "--timing-coverage",
+  "--output",
+  "F:\\Coding\\OpenFlight\\research\\claude-clubhead-size-pose-audit-2026-11-12\\results\\t1-shot3\\replay.json"
+ ],
+ "returncode": 0,
+ "exception": null,
+ "elapsed_s": 9.33
+}

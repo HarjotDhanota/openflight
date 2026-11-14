@@ -1,0 +1,58 @@
+SHOT 1   resting ball 1782 mm from the lens, 0.18 deg below the assumed axis
+   camera pitch inferred from the resting ball: 2.18 deg down (ball on the unit's own surface) or 1.37 deg (ball 25.4 mm higher: the mat). Angles against the horizon = angles against the camera axis minus this.
+   T1 BALL LAUNCH (application gave the D-plane step 19.59 deg, source radar)
+      radar as FULL speed (old)                      launch  17.8 deg above the camera axis =  15.6 above the horizon (16.5 with the mat);  6.7 deg right; full speed 37.0 m/s (radar 36.5); mid-contact -0.43 ms; worst pixel 0.39
+      radar as line-of-sight speed, ball at the tee  launch  17.2 deg above the camera axis =  15.0 above the horizon (15.8 with the mat);  6.4 deg right; full speed 38.6 m/s (radar 36.5); mid-contact -0.42 ms; worst pixel 0.35
+      radar as line-of-sight speed, ball 6 ms out    launch  17.3 deg above the camera axis =  15.1 above the horizon (16.0 with the mat);  6.5 deg right; full speed 38.2 m/s (radar 36.5); mid-contact -0.42 ms; worst pixel 0.36
+      pixels only (no radar)                         launch  13.0 deg above the camera axis; full speed 54.4 m/s; mid-contact -0.28 ms
+   T2 CLUB DESCENT (application gave the D-plane step -8.65 deg; it reads a quadratic tangent at its last tracked frame)
+      frame   ms to mid-contact | ferrule x, y px | lowest row on the axis | application's tracked point (status)
+      f41     -9.25           |  87.77  44.91   |   76.5                 |  94.95  75.05 (heel_sole_corner)
+      f42     -5.64           | 109.85  63.74   |   97.5                 | 123.92  95.47 (heel_sole_corner)
+      f43     -2.02           | 127.14  76.01   |  110.5                 | 135.95 106.19 (heel_sole_corner)
+      ferrule              frames 41-43 | drop per interval mm:  24.0  17.3 | chord deg: -11.7  -8.6 | quadratic tangent at last frame -6.9, at mid-contact -5.1 (+-1.9); turn +0.88 deg/ms; straight line -10.2
+      lowest visible row   frames 41-43 | drop per interval mm:  31.0  22.4 | chord deg: -14.9 -11.0 | quadratic tangent at last frame -8.9, at mid-contact -6.6 (+-1.9); turn +1.09 deg/ms; straight line -13.0
+      application's point  frames 41-43 | drop per interval mm:  30.0  18.3 | chord deg: -14.2  -9.1 | quadratic tangent at last frame -6.3, at mid-contact -3.0 (+-1.9); turn +1.41 deg/ms; straight line -11.8
+      application's point drops LESS than the ferrule by (mm per interval, frames 41-43):  -5.9  -1.0
+      RULE: turf-line stall on the last interval: NO (last -1.0 mm, rule >= 4; earlier intervals within 2 mm: False)
+      ADOPTED attack: -3.6 deg against the camera axis = -5.8 against the horizon (-4.9 with the mat) -- ferrule last chord -8.6 moved 3.83 ms to contact at 1.3 deg/ms (fallback: fewer than 4 frames)
+
+SHOT 3   resting ball 2271 mm from the lens, -0.22 deg below the assumed axis
+   camera pitch inferred from the resting ball: 2.08 deg down (ball on the unit's own surface) or 1.44 deg (ball 25.4 mm higher: the mat). Angles against the horizon = angles against the camera axis minus this.
+   T1 BALL LAUNCH (application gave the D-plane step 18.64 deg, source camera_fallback)
+      radar as FULL speed (old)                      launch  21.4 deg above the camera axis =  19.3 above the horizon (20.0 with the mat);  6.7 deg right; full speed 37.7 m/s (radar 37.6); mid-contact -0.19 ms; worst pixel 0.22
+      radar as line-of-sight speed, ball at the tee  launch  20.4 deg above the camera axis =  18.3 above the horizon (19.0 with the mat);  6.6 deg right; full speed 39.8 m/s (radar 37.6); mid-contact -0.17 ms; worst pixel 0.22
+      radar as line-of-sight speed, ball 6 ms out    launch  20.6 deg above the camera axis =  18.5 above the horizon (19.1 with the mat);  6.6 deg right; full speed 39.5 m/s (radar 37.6); mid-contact -0.17 ms; worst pixel 0.22
+      pixels only (no radar)                         launch  18.3 deg above the camera axis; full speed 45.4 m/s; mid-contact -0.12 ms
+   T2 CLUB DESCENT (application gave the D-plane step +5.24 deg; it reads a quadratic tangent at its last tracked frame)
+      frame   ms to mid-contact | ferrule x, y px | lowest row on the axis | application's tracked point (status)
+      f41     -8.85           |  99.41  43.70   |   69.5                 | 110.65  69.46 (heel_sole_corner)
+      f42     -5.23           | 111.21  59.55   |   90.5                 | 124.86  86.83 (heel_sole_corner)
+      f43     -1.62           | 117.23  68.65   |   89.5                 | 121.36  85.65 (heel_sole_corner)
+      ferrule              frames 41-43 | drop per interval mm:  28.1  17.3 | chord deg: -12.5  -7.9 | quadratic tangent at last frame -5.5, at mid-contact -3.3 (+-1.7); turn +1.27 deg/ms; straight line -10.2
+      lowest visible row   frames 41-43 | drop per interval mm:  41.9  -0.8 | chord deg: -17.9  +0.4 | quadratic tangent at last frame +10.2, at mid-contact +18.5 (+-1.6); turn +4.91 deg/ms; straight line -9.3
+      application's point  frames 41-43 | drop per interval mm:  34.4  -1.7 | chord deg: -15.0  +0.8 | quadratic tangent at last frame +9.0, at mid-contact +15.8 (+-1.6); turn +4.19 deg/ms; straight line -7.5
+      application's point drops LESS than the ferrule by (mm per interval, frames 41-43):  -6.3 +19.0
+      RULE: turf-line stall on the last interval: NO (last 19.0 mm, rule >= 4; earlier intervals within 2 mm: False)
+      ADOPTED attack: -3.5 deg against the camera axis = -5.5 against the horizon (-4.9 with the mat) -- ferrule last chord -7.9 moved 3.43 ms to contact at 1.3 deg/ms (fallback: fewer than 4 frames)
+
+SHOT 4   resting ball 2112 mm from the lens, -0.07 deg below the assumed axis
+   camera pitch inferred from the resting ball: 2.07 deg down (ball on the unit's own surface) or 1.38 deg (ball 25.4 mm higher: the mat). Angles against the horizon = angles against the camera axis minus this.
+   T1 BALL LAUNCH (application gave the D-plane step 25.90 deg, source camera_fallback)
+      radar as FULL speed (old)                      launch  30.3 deg above the camera axis =  28.2 above the horizon (28.9 with the mat);  8.5 deg right; full speed 34.2 m/s (radar 33.9); mid-contact -0.01 ms; worst pixel 0.25
+      radar as line-of-sight speed, ball at the tee  launch  27.7 deg above the camera axis =  25.6 above the horizon (26.3 with the mat);  8.1 deg right; full speed 38.0 m/s (radar 33.9); mid-contact +0.05 ms; worst pixel 0.16
+      radar as line-of-sight speed, ball 6 ms out    launch  28.1 deg above the camera axis =  26.0 above the horizon (26.7 with the mat);  8.2 deg right; full speed 37.4 m/s (radar 33.9); mid-contact +0.04 ms; worst pixel 0.16
+      pixels only (no radar)                         launch  25.1 deg above the camera axis; full speed 42.8 m/s; mid-contact +0.12 ms
+   T2 CLUB DESCENT (application gave the D-plane step -2.24 deg; it reads a quadratic tangent at its last tracked frame)
+      frame   ms to mid-contact | ferrule x, y px | lowest row on the axis | application's tracked point (status)
+      f41    -11.43           | 112.62  16.32   |   46.5                 | refused: no shaft line in the moving pixels
+      f42     -7.81           | 126.21  44.13   |   72.5                 | 137.25  71.85 (heel_sole_corner)
+      f43     -4.20           | 135.42  61.95   |   94.5                 | 146.89  82.91 (heel_sole_corner)
+      f44     -0.58           | 138.79  71.89   |   94.5                 | 143.39  90.25 (heel_sole_corner)
+      ferrule              frames 41-44 | drop per interval mm:  41.5  29.4  17.8 | chord deg: -17.6 -12.8  -7.9 | quadratic tangent at last frame -5.2, at mid-contact -4.4 (+-0.8); turn +1.34 deg/ms; straight line -12.9
+      lowest visible row   frames 41-44 | drop per interval mm:  42.1  41.1   1.5 | chord deg: -17.8 -17.4  -0.7 | quadratic tangent at last frame +0.4, at mid-contact +1.9 (+-0.8); turn +2.26 deg/ms; straight line -12.8
+      application's point  frames 42-44 | drop per interval mm:  19.9  15.1 | chord deg:  -8.7  -6.8 | quadratic tangent at last frame -5.7, at mid-contact -5.3 (+-1.3); turn +0.53 deg/ms; straight line -7.8
+      application's point drops LESS than the ferrule by (mm per interval, frames 42-44):  +9.5  +2.7
+      RULE: turf-line stall on the last interval: NO (last 2.7 mm, rule >= 4; earlier intervals within 2 mm: False)
+      ADOPTED attack: -4.4 deg against the camera axis = -6.5 against the horizon (-5.8 with the mat) -- ferrule quadratic tangent at mid-contact (4 frames, turn +1.34 deg/ms)
+

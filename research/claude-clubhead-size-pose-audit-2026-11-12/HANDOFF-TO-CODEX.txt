@@ -1,0 +1,107 @@
+HANDOFF TO CODEX - clubhead size / shape / pose audit, 12-13 November 2026
+From Claude. Application 0fa9870bec40d50c25d6da00b06850afea94c4c4, clean before and after; I changed nothing in it.
+Originals hash-identical. Everything is in research/claude-clubhead-size-pose-audit-2026-11-12/, uncommitted.
+Reasoning, ledger and tables: REPORT.txt. Open figures/carry-shot3.png and carry-shot4.png first.
+[R] measured on original pixels. [V] read in the code. [D] deduction. [P] proposal, not production-tested.
+Four clips of one club: development data. No accuracy claim anywhere.
+
+1. WHY THE OVERLAY LOOKS THE WRONG SIZE AND SHAPE
+  It is mostly in the wrong place, and drawn whole where only part of the head is visible.
+  a. [R] Shots 3 and 4, last frame before contact: a diffuse region BRIGHTER than the empty scene stands above the
+     sharp head; the resting ball shows through it (figures/check-diff-shot3-42-43.png, -shot4-43-44.png). Your toe
+     and top-line samples are on its edge, your sole on a boundary inside the head. Model top above the real top
+     edge: 7 px = 16 mm (shot 3), 14 px = 29 mm (shot 4). 49 % and 67 % of the drawn model is off the head.
+     It is not the head: its top is 23 to 26 mm higher against the ferrule than the head's top was 3.6 ms earlier,
+     with the shaft direction changed by under 1 degree. What it is, I have not established (thrown turf is my
+     reading).
+  b. [R] Same frames: about 15 mm of the real head is out of sight. Ferrule, hosel and top edge drop 19 mm in one
+     frame; the lowest visible row does not move. Ferrule to lowest visible row 63.6 -> 45.7 mm and 64.5 -> 47.2 mm.
+     The sole ends roughly 15 to 25 mm under the resting ball's bottom row. The owner's remark is right.
+  c. [R] Shot 1 f43 has neither. Toe and bottom agree; top 4 px = 7 mm high; shaft 14 mm off; the head looks about
+     10 % smaller than the model on both shot-1 frames. Orientation, depth or 4 px of hidden bottom: not separable.
+  Not the cause:
+   - Angles not applied. They are (my projection matches your outline to 0.0001 px). A flat outline tilted by the
+     loft moves 1 to 3 px in total; with all three angles zeroed, 1.1 to 2.9 px. That is why it looks un-tilted.
+   - Drawing-to-mm or aspect. One mm scale on both axes. In clear air the generic outline covers the club's own
+     silhouette at IoU 0.83 / 0.90 / 0.90 by translation alone; best single size 0.90 / 0.95 / 1.05.
+   - Camera scale: ball diameter fixes it to about 5 % at the ball.
+  Heel-toe is still roughly right. Height is what breaks.
+
+2. KEEP
+  - The projection, the budget's structure, refusing rather than guessing (both height refusals were correct).
+  - The generic outline as the outer silhouette. Placed correctly it leaves 4 to 16 % of the area unexplained.
+  - 0fa9870b's attack-angle forwarding.
+
+3. STOP
+  - Fitting the sole near impact. On these shots it is under the turf line.
+  - Treating "changed from the reference" as "head". Brighter and diffuse above the head is not the head.
+  - Reading the top-line diagnostic as agreement: +4.9 mm (shot 3) and -5.1 mm (shot 4) while the real edge is 16 and
+    29 mm away. EDGE_SEARCH_PX = 6 cannot reach it.
+  - Adding pose freedom on the bracket frames. More freedom there fits the bright region better.
+  - Judging by convergence or test counts: no test has a ground, thrown material, or a head partly out of sight.
+  - Drawing the full face solid where it cannot be seen.
+
+4. CHANGE NEXT, IN THIS ORDER (REPORT section 7). Tests first; each fails or cannot be written today.
+  T1 recorded fixtures, shots 3 and 4 last frame: model top within 4 px of the cavity's upper edge net of the rim.
+     Today 7 and 14 px.
+  T2 generated: lower 15 mm of the head behind an opaque ground line; placement must not rise with the ground.
+  T3 generated: a semi-transparent brighter region above the head, ball visible through it; placement must not move.
+  T4 rigid consistency: model-top-to-ferrule distance stable across consecutive frames unless the shaft turns.
+  T5 overlay: nothing solid below the lowest visible row.
+  R1 [P] Anchor the head to the shaft. Shaft axis and ferrule are sharp on every frame, before and after contact.
+     Place the model on the last clear-air frame or two, carry it rigidly, interpolate across contact with the
+     ferrule. scripts/carry_lib.py is the 2-D research version (one function, about 60 lines).
+  R2 [P] Lowest visible row measured per frame; nothing below it is an observation. Top edge is the vertical check,
+     searched around the shaft-carried prediction.
+  R3 [P] Accept an edge only where the head is darker than what it covers, or where it agrees with the carry.
+  R4 [V][R] Hosel foot in 3-D: the model's axis is 4.5 to 6.2 mm too far heel-ward by construction (980-992 plus
+     the drawing's face-normal view); measured 3.8 and 4.2 mm on shots 3 and 4.
+  R5 [P] Carry the rotation: toe-to-shaft stretch w per frame (1.09 / 1.06 / 1.10 here) and the toe peak's drift
+     against the ferrule (5 mm on shot 1) for the loft change. The 2-D carry lacks this: 3 px on shot 1.
+  R6 [P] Overlay clipped at the lowest visible row, hidden part dashed.
+  No small production patch exists for this; I wrote none.
+
+5. ILLUSTRATION ONLY (results/READOUT.txt)
+  Carried model moved to your contact instant by the ferrule's motion across the bracket, nothing fitted:
+     shot 1  +30.1 toe-ward,  -7.3 up      (yours +32.7, -10.8)
+     shot 3   +4.3 toe-ward, +13.1 up      (yours  +0.2, refused)
+     shot 4  -15.9 toe-ward,  +7.3 up      (yours -19.1, refused)
+  +-5 to 7 mm in height per 3 px of carry error. The photographed marks, looked at by eye afterwards, lie in the
+  same directions (mid toe, upper centre, top heel). Exhausted shots, photos already seen: not accuracy.
+
+6. WHAT MY FIRST PASS GOT WRONG
+  My own automatic silhouette counted the bright region as head on shots 3 and 4, exactly as your edge finder does.
+  PROTOCOL.txt addendum 1 records it; DIAG.txt keeps the discarded numbers. Shot 4's rim calibration also failed
+  (13.5 px); I used the mean of shots 1 and 3 (2.75 px) and marked it. Shot 3's edge check has only 6 columns.
+  Corrections to my previous audit are in REPORT section 8: I had the evidence for (a) and misread it.
+
+7. OFFLINE NOW / NEEDS THE OWNER / NEEDS A CAPTURE
+  Offline: T1 to T5; R1 to R6 as research code; carry.py on every other recorded clip to see how general a and b are.
+  Owner, one sentence: what the ball rests on and how deep the mat's pile is (the sole goes 15 to 25 mm under the
+  ball's bottom row here).
+  Capture: only validation. New marked shots the method has never seen, mark read against a scale.
+
+8. OPEN
+  What the bright region is. Shot 1's 10 %. Loft and face to better than about 10 deg from the silhouette (D-plane
+  loft 21.6 to 32.9 deg for one club and player deserves its own look). Shot 2 (never placed). This club's true
+  dimensions: I used none.
+
+ADDENDUM 2 (13 November) - SUPERSEDES SECTION 1's "not the size", SECTION 4's R1 AND SECTION 5
+  The owner traced the head on shot 1 f43 (owner-trace/). Against that trace:
+     your pose, your flat model                 4.30 px rms, overlap 0.69
+     rigid club with the hosel in 3-D, moved    1.71 px, 0.83
+     + one size number (0.919)                  0.68 px, 0.93
+     + face angle free instead                  1.68 px (no gain)
+  Then, with size frozen at 0.919 and your angles unchanged, placing by SHAFT LINE + TOP EDGE only on all six frames:
+  the unused sharp toe agrees to +0.8 / +1.8 / +0.6 px (last frames) and +1.0 / -0.1 / +0.2 (clear air). At size 1.0
+  it is +4 to +6 px every time. The drawing is about 8 % bigger than this club. I had said otherwise; my test had cut
+  the hosel out of the window.
+  Do, in this order:
+   1. One rigid club: blade outline without the drawn neck, hosel/shaft cylinder on the real 3-D axis
+      (scripts/club3d.py, Club.parts). The face-on neck is in the wrong place from behind by construction.
+   2. Place from the shaft line and the top edge. Never from the sole. Toe is the width check.
+   3. A per-club size, learned from toe-to-shaft width on clear-air frames of ordinary shots. No user step.
+   4. Use the shaft's centre, not its highlight (about 2.5 px bias today).
+   5. T1 to T5, R2, R3, R6 as before. Drop R1 (the carry) and the section 5 readout.
+  Not shown: anything about loft, face or roll. From behind the outline cannot read the face angle to better than
+  about 10 degrees. Figures: figures/fit-trace-shot1.png, place3d-shot1/3/4.png.

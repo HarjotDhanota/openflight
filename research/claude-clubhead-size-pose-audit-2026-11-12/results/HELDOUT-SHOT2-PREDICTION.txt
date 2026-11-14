@@ -1,0 +1,13 @@
+BLIND PREDICTION, shot 2 (PROTOCOL addendum 10). No face photo or mark has been read. TS4, shaft axis 75.0 mm, hosel 61.0 mm.
+   setup_free: ball (top-edge rise, sideways px) by frame: f37 +0.0,-0.2 f38 -0.0,-0.1 f39 -0.1,-0.1 f40 -0.0,-0.1 f41 n/a f42 n/a -> last frame measured at rest 40
+   setup_free: first moved frame 41? no ball track
+   setup_free: first moved frame 42? no ball track
+   setup_free: first moved frame 43? ball seen on [43, 44, 45]; mid-contact 2.48 ms after frame 42 (must be 0..3.62); worst pixel 0.11 -> yes
+   ball track, pixels + radar: mid-contact +0.67 ms from the reference (+-0.09); 45.6 m/s; launch 19.5 deg above the camera axis, 6.6 right; worst pixel 0.11
+   ball track, pixels only: mid-contact +0.70 ms from the reference (+-0.12); 50.4 m/s; launch 18.0 deg above the camera axis, 6.5 right; worst pixel 0.05
+   rest frame 42, first moved 43; mid-contact 2.48 ms after frame 42 and 1.14 ms before frame 43
+   ferrule px in the crop: rest frame 137.7, 78.0; after 139.4, 84.5; shaft slope 0.544 / 0.546
+   orientation (application's upstream metrics): face +5.63, loft 23.81, roll -0.44
+PRIMARY PREDICTION: 42.1 mm from the toe, 11.8 mm above the leading edge
+SECONDARY (launch from the ball track, 17.3 deg against the horizon at pitch 2.18; application's attack -5.77): face +5.76, loft 22.74 -> 42.1 mm from the toe, 12.0 mm above the leading edge
+   application's metrics for reference: launch 18.15, attack -5.77, path 11.92, face 7.70, loft 23.81, dynamic lie 62.74

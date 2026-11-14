@@ -1,0 +1,27 @@
+ALONG-SHAFT DATUM: the spec hosel length on every frame
+TS4 model: shaft axis 80.1 mm from the toe, hosel top 54.8 mm up the axis, lie 62.5, static loft 33.0; toe extreme 45.8 mm from the face centre, leading edge 23.4 mm below it
+
+SHOT 1  (supplied face +1.4, loft 26.7, roll -3.5)
+   mid-contact -0.43 ms from the application's instant; frames 42, 43, 44 at -5.62, -2.01, +1.61 ms
+   clear-air frame 42: head turned +20.5 deg (shaft 0.53 px, head height centre -0.04 px, toe +0.10 px); hosel top measured 54.8 mm up the axis (spec hosel length 54.8)
+   last frame 43:      head turned +14.1 deg (shaft 0.39 px, hosel top -0.03 px, toe +0.08 px) -> closing at 1767 deg per second
+   after frame 44:     shaft 0.49 px, hosel top +0.00 px (turn set to the contact value)
+   against the owner's trace on frame 43 (not used): boundary rms 1.09 px, overlap 0.89
+   IMPACT, turn carried to contact at that rate   (face +10.6 at contact): 17.9 mm from the toe, 21.6 mm above the leading edge | mark 12.3, 23.9 | miss +5.6, -2.3 mm
+   IMPACT, turn held at the last frame's value    (face +14.1 at contact): 17.2 mm from the toe, 21.6 mm above the leading edge | mark 12.3, 23.9 | miss +4.9, -2.2 mm
+
+SHOT 3  (supplied face +4.9, loft 21.6, roll +1.6)
+   mid-contact -0.19 ms from the application's instant; frames 42, 43, 44 at -5.21, -1.60, +2.02 ms
+   clear-air frame 42: head turned +21.1 deg (shaft 0.05 px, head height centre -0.01 px, toe +0.02 px); hosel top measured 54.8 mm up the axis (spec hosel length 54.8)
+   last frame 43:      head turned +16.6 deg (shaft 0.06 px, hosel top +0.01 px, toe -0.02 px) -> closing at 1230 deg per second
+   after frame 44:     shaft 0.55 px, hosel top -0.00 px (turn set to the contact value)
+   IMPACT, turn carried to contact at that rate   (face +14.7 at contact): 42.9 mm from the toe, 26.9 mm above the leading edge | mark 43.5, 30.3 | miss -0.6, -3.4 mm
+   IMPACT, turn held at the last frame's value    (face +16.6 at contact): 42.8 mm from the toe, 26.9 mm above the leading edge | mark 43.5, 30.3 | miss -0.6, -3.4 mm
+
+SHOT 4  (supplied face +8.5, loft 32.9, roll -1.0)
+   mid-contact -0.01 ms from the application's instant; frames 43, 44, 45 at -4.14, -0.52, +3.09 ms
+   clear-air frame 43: head turned +28.7 deg (shaft 0.32 px, head height centre -0.03 px, toe +0.06 px); hosel top measured 54.8 mm up the axis (spec hosel length 54.8)
+   last frame 44:      head turned +20.7 deg (shaft 0.15 px, hosel top -0.01 px, toe +0.03 px) -> closing at 2213 deg per second
+   after frame 45:     shaft 0.75 px, hosel top +0.00 px (turn set to the contact value)
+   IMPACT, turn carried to contact at that rate   (face +19.6 at contact): 68.7 mm from the toe, 25.0 mm above the leading edge | mark 66.1, 28.1 | miss +2.7, -3.1 mm
+   IMPACT, turn held at the last frame's value    (face +20.7 at contact): 68.8 mm from the toe, 25.0 mm above the leading edge | mark 66.1, 28.1 | miss +2.7, -3.1 mm
